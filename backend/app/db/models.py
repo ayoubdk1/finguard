@@ -5,10 +5,13 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -52,7 +55,10 @@ class Account(Base):
 
     user: Mapped["User | None"] = relationship(back_populates="accounts")
     entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="account")
-
+    __table_args__ = (
+        UniqueConstraint("id", "currency", name="uq_accounts_id_currency"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_accounts_currency_format"),
+    )
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -71,6 +77,15 @@ class Transaction(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "currency"],
+            ["accounts.id", "accounts.currency"],
+            name="fk_ledger_entries_account_currency",
+        ),
+        CheckConstraint("amount <> 0", name="ck_ledger_entries_amount_nonzero"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_ledger_entries_currency_format"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     transaction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("transactions.id"))  # rule I8
