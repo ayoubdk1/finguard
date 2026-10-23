@@ -54,7 +54,11 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User | None"] = relationship(back_populates="accounts")
-    entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="account")
+    entries: Mapped[list["LedgerEntry"]] = relationship(
+        back_populates="account",
+        primaryjoin="Account.id == LedgerEntry.account_id",
+        foreign_keys="LedgerEntry.account_id",
+    )
     __table_args__ = (
         UniqueConstraint("id", "currency", name="uq_accounts_id_currency"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_accounts_currency_format"),
@@ -95,4 +99,8 @@ class LedgerEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     transaction: Mapped["Transaction"] = relationship(back_populates="entries")
-    account: Mapped["Account"] = relationship(back_populates="entries")
+    account: Mapped["Account"] = relationship(
+        back_populates="entries",
+        primaryjoin="Account.id == LedgerEntry.account_id",
+        foreign_keys="LedgerEntry.account_id",
+    )
