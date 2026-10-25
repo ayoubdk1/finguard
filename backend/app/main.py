@@ -145,6 +145,26 @@ def create_deposit(
                 detail="Deposit could not be posted"
             ) from exc
 
+        # Reject reused keys with different deposit details
+        rows = db.execute(
+            select(LedgerEntry.account_id, LedgerEntry.amount)
+            .where(LedgerEntry.transaction_id == tx.id)
+        ).all()
+        actual_entries = set(rows)
+        expected_entries = {
+            (funding.id, -data.amount_cents),
+            (account.id, data.amount_cents)
+        }
+        if (
+            len(rows) != 2
+            or actual_entries != expected_entries
+            or tx.description != data.description
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key used for different deposit"
+            )
+
         return {
             "transaction_id": tx.id,
             "status": tx.status,
