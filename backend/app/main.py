@@ -1,5 +1,5 @@
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from app.db.models import User, Account, AccountType
@@ -7,6 +7,17 @@ from app.db.models import User, Account, AccountType
 from app.db.session import engine, SessionLocal
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.account import AccountCreate, AccountResponse
+from sqlalchemy import select
+
+from app.schemas.deposit import DepositCreate
+from app.services.ledger import (
+    EntryInput,
+    post_transaction,
+    get_balance,
+    LedgerError,
+    InvalidTransaction,
+    AccountNotFound,
+)
 
 app = FastAPI(title="FinGuard API")
 
@@ -66,4 +77,76 @@ def create_account(data: AccountCreate):
         db.refresh(account)
 
         return account
+
+@app.post("/deposits", status_code=201)
+def create_deposit(
+    data: DepositCreate,
+    idempotency_key: str = Header(
+        min_length=1,
+        max_length=100,
+        alias="Idempotency-Key"
+    )
+):
+    with SessionLocal() as db:
+
+        # 1. Find customer account
+        account = db.get(Account, data.account_id)
+
+        if account is None or account.account_type != AccountType.CUSTOMER:
+            raise HTTPException(
+                status_code=404,
+                detail="Customer account not found"
+            )
+
+        # 2. Check currency
+        if account.currency != "TND":
+            raise HTTPException(
+                status_code=400,
+                detail="Only TND deposits are supported"
+            )
+
+        # 3. Find SYSTEM_FUNDING
+        funding = db.scalar(
+            select(Account).where(
+                Account.name == "SYSTEM_FUNDING",
+                Account.account_type == AccountType.SYSTEM,
+                Account.currency == "TND"
+            )
+        )
+
+        if funding is None:
+            raise HTTPException(
+                status_code=409,
+                detail="TND SYSTEM_FUNDING account not found"
+            )
+
+        # 4. Post balanced ledger entries
+        try:
+            tx = post_transaction(
+                session=db,
+                idempotency_key=idempotency_key,
+                entries=[
+                    EntryInput(funding.id, -data.amount_cents),
+                    EntryInput(account.id, data.amount_cents),
+                ],
+                description=data.description
+            )
+        except AccountNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except InvalidTransaction as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except LedgerError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Deposit could not be posted"
+            ) from exc
+
+        return {
+            "transaction_id": tx.id,
+            "status": tx.status,
+            "account_id": account.id,
+            "amount_cents": data.amount_cents,
+            "currency": account.currency,
+            "balance_cents": get_balance(db, account.id)
+        }
 
