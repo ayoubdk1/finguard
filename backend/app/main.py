@@ -1,10 +1,12 @@
-
+from uuid import UUID
+from app.schemas.balance import BalanceResponse
 from fastapi import FastAPI, HTTPException, Header
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from app.db.models import User, Account, AccountType, LedgerEntry
+from app.db.models import User, Account, AccountType, LedgerEntry, Transaction
 from app.schemas.transfer import TransferCreate
 from app.services.ledger import InsufficientFunds
+from app.schemas.history import TransactionHistoryItem, TransactionHistoryResponse
   
 from app.db.session import engine, SessionLocal
 from app.schemas.user import UserCreate, UserResponse
@@ -254,5 +256,82 @@ def create_transfer(
             "source_balance_cents": get_balance(db, source.id),
             "destination_balance_cents": get_balance(db, destination.id)
         }
+        
+@app.get(
+    "/accounts/{account_id}/balance",
+    response_model=BalanceResponse
+)
+def account_balance(account_id: UUID):
+    with SessionLocal() as db:
+
+        # 1. Find account
+        account = db.get(Account, account_id)
+
+        # 2. Check if account exists
+        if account is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found"
+            )
+
+        # 3. Calculate balance from ledger
+        balance = get_balance(db, account.id)
+
+        # 4. Return balance
+        return BalanceResponse(
+            account_id=account.id,
+            currency=account.currency,
+            balance_cents=balance
+        )
+
+
+@app.get(
+    "/accounts/{account_id}/transactions",
+    response_model=TransactionHistoryResponse
+)
+def account_transactions(account_id: UUID):
+    with SessionLocal() as db:
+
+        # 1. Check account exists
+        account = db.get(Account, account_id)
+
+        if account is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found"
+            )
+
+        # 2. Get ledger entries and transactions
+        rows = db.execute(
+            select(LedgerEntry, Transaction)
+            .join(
+                Transaction,
+                LedgerEntry.transaction_id == Transaction.id
+            )
+            .where(LedgerEntry.account_id == account_id)
+            .order_by(
+                Transaction.created_at.desc(),
+                LedgerEntry.id.desc()
+            )
+        ).all()
+
+        # 3. Build transaction history
+        history = [
+            TransactionHistoryItem(
+                transaction_id=tx.id,
+                created_at=tx.created_at,
+                description=tx.description,
+                status=tx.status.value,
+                amount_cents=entry.amount,
+                currency=entry.currency
+            )
+            for entry, tx in rows
+        ]
+
+        # 4. Return history
+        return TransactionHistoryResponse(
+            account_id=account_id,
+            transactions=history
+        )
 
 
