@@ -2,7 +2,9 @@
 from fastapi import FastAPI, HTTPException, Header
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from app.db.models import User, Account, AccountType
+from app.db.models import User, Account, AccountType, LedgerEntry
+from app.schemas.transfer import TransferCreate
+from app.services.ledger import InsufficientFunds
   
 from app.db.session import engine, SessionLocal
 from app.schemas.user import UserCreate, UserResponse
@@ -149,4 +151,108 @@ def create_deposit(
             "currency": account.currency,
             "balance_cents": get_balance(db, account.id)
         }
+        
+@app.post("/transfers", status_code=201)
+def create_transfer(
+    data: TransferCreate,
+    idempotency_key: str = Header(
+        min_length=1,
+        max_length=100,
+        alias="Idempotency-Key"
+    )
+):
+    with SessionLocal() as db:
+
+        # 1. Prevent transfer to the same account
+        if data.source_account_id == data.destination_account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot transfer to the same account"
+            )
+
+        # 2. Find both accounts
+        source = db.get(Account, data.source_account_id)
+        destination = db.get(Account, data.destination_account_id)
+
+        if source is None or destination is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found"
+            )
+
+        # 3. Only CUSTOMER accounts
+        if (
+            source.account_type != AccountType.CUSTOMER
+            or destination.account_type != AccountType.CUSTOMER
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Transfers require customer accounts"
+            )
+
+        # 4. Check currency
+        if source.currency != destination.currency:
+            raise HTTPException(
+                status_code=400,
+                detail="Accounts must use the same currency"
+            )
+
+        # 5. Post transaction
+        try:
+            tx = post_transaction(
+                session=db,
+                idempotency_key=idempotency_key,
+                entries=[
+                    EntryInput(source.id, -data.amount_cents),
+                    EntryInput(destination.id, data.amount_cents),
+                ],
+                description=data.description
+            )
+
+        except InsufficientFunds as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except AccountNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except InvalidTransaction as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except LedgerError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+        # 6. Verify idempotency key was not reused
+        # with different transaction details
+        rows = db.execute(
+            select(
+                LedgerEntry.account_id,
+                LedgerEntry.amount
+            ).where(LedgerEntry.transaction_id == tx.id)
+        ).all()
+
+        actual_entries = {(r[0], r[1]) for r in rows}
+        expected_entries = {
+            (source.id, -data.amount_cents),
+            (destination.id, data.amount_cents)
+        }
+
+        if (
+            len(rows) != 2
+            or actual_entries != expected_entries
+            or tx.description != data.description
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key used for different transaction"
+            )
+
+        # 7. Return the result
+        return {
+            "transaction_id": tx.id,
+            "status": tx.status,
+            "source_account_id": source.id,
+            "destination_account_id": destination.id,
+            "amount_cents": data.amount_cents,
+            "currency": source.currency,
+            "source_balance_cents": get_balance(db, source.id),
+            "destination_balance_cents": get_balance(db, destination.id)
+        }
+
 
