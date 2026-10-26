@@ -1,7 +1,7 @@
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-
+from collections.abc import Callable
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
@@ -55,6 +55,7 @@ def post_transaction(
     idempotency_key: str,
     entries: list[EntryInput],
     description: str = "",
+    before_commit: Callable[[Session, Transaction], None] | None = None,
 ) -> Transaction:
     # 1. Validate the request itself (R1, R3, I1, I9)
     if not idempotency_key:
@@ -99,33 +100,57 @@ def post_transaction(
                 session.rollback()
                 raise InsufficientFunds(f"insufficient funds in account {acct.id}")
 
-    # 6. Write everything, then commit once (I6)
+
+    # 6. Write ledger entries and outbox event atomically (I6)
     tx = Transaction(
         idempotency_key=idempotency_key,
         description=description,
         status=TransactionStatus.POSTED,
     )
-    session.add(tx)
-    session.flush()
-    for e in entries:
-        session.add(
-            LedgerEntry(
-                transaction_id=tx.id,
-                account_id=e.account_id,
-                amount=e.amount,
-                currency=by_id[e.account_id].currency,
-            )
-        )
+
     try:
+        # Create the transaction
+        session.add(tx)
+        session.flush()
+
+        # Create ledger entries
+        for e in entries:
+            session.add(
+                LedgerEntry(
+                    transaction_id=tx.id,
+                    account_id=e.account_id,
+                    amount=e.amount,
+                    currency=by_id[e.account_id].currency,
+                )
+            )
+
+        # Write ledger entries before the callback
+        session.flush()
+
+        # Create outbox event in the SAME database session
+        if before_commit is not None:
+            before_commit(session, tx)
+
+        # Commit ledger + outbox together
         session.commit()
+
     except IntegrityError as exc:
         session.rollback()
-        # Two requests with the same key raced: return the winner
+
+        # Concurrent requests with the same key:
+        # return the transaction that was committed first
         winner = _find_by_key(session, idempotency_key)
         if winner is not None:
             return winner
+
         raise LedgerError(str(exc.orig)) from exc
+
     except DBAPIError as exc:
         session.rollback()
         raise LedgerError(str(exc.orig)) from exc
+
+    except Exception:
+        session.rollback()
+        raise
+
     return tx
