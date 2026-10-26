@@ -7,6 +7,8 @@ from app.db.models import User, Account, AccountType, LedgerEntry, Transaction
 from app.schemas.transfer import TransferCreate
 from app.services.ledger import InsufficientFunds
 from app.schemas.history import TransactionHistoryItem, TransactionHistoryResponse
+from app.schemas.risk import RiskAssessmentRequest
+from app.services.risk_assessment import assess_transaction_risk
   
 from app.db.session import engine, SessionLocal
 from app.schemas.user import UserCreate, UserResponse
@@ -353,5 +355,17 @@ def account_transactions(account_id: UUID):
             account_id=account_id,
             transactions=history
         )
+        
+@app.post("/risk/assess")
+def assess_risk_endpoint(data: RiskAssessmentRequest):
+    result = assess_transaction_risk(
+        amount_cents=data.amount_cents,
+        transfers_last_10min=data.transfers_last_10min,
+        account_age_minutes=data.account_age_minutes,
+        failed_transfers_last_hour=data.failed_transfers_last_hour,
+    )
+
+    return result
+
 
 
