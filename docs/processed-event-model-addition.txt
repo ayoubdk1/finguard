@@ -1,0 +1,15 @@
+# APPEND this class to the END of your existing backend/app/db/models.py.
+# Its required names (Base, Mapped, mapped_column, UUID, String, DateTime,
+# func, uuid, datetime) are already used by your OutboxEvent model.
+# DO NOT replace models.py with this snippet!
+
+class ProcessedEvent(Base):
+    __tablename__ = "processed_events"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

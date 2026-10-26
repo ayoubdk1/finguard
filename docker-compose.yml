@@ -1,19 +1,60 @@
 services:
+
+  # ====================================
+  # PostgreSQL Database
+  # ====================================
   db:
     image: postgres:16
     container_name: finguard-db
+
     environment:
       POSTGRES_USER: finguard
       POSTGRES_PASSWORD: finguard
       POSTGRES_DB: finguard
+
     ports:
       - "5432:5432"
+
     volumes:
       - pgdata:/var/lib/postgresql/data
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U finguard"]
       interval: 5s
       retries: 10
 
+  # ====================================
+  # Redpanda Event Streaming
+  # ====================================
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.6
+    container_name: finguard-redpanda
+
+    command:
+      - redpanda
+      - start
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://127.0.0.1:19092
+      - --rpc-addr
+      - redpanda:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
+      - --mode
+      - dev-container
+      - --smp
+      - "1"
+
+    ports:
+      - "127.0.0.1:19092:19092"
+
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+
+# ====================================
+# Persistent Docker Volumes
+# ====================================
 volumes:
   pgdata:
+  redpanda_data:
