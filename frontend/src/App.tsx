@@ -18,6 +18,19 @@ import './App.css'
 const ALICE_ACCOUNT_ID = '007c9f83-03db-48fd-bdae-9024fea8f52a'
 const BOB_ACCOUNT_ID = 'b72238cf-a238-4fac-81a1-6421f192f7c7'
 
+const customerAccounts = [
+  {
+    id: ALICE_ACCOUNT_ID,
+    name: 'Alice',
+    type: 'CUSTOMER',
+  },
+  {
+    id: BOB_ACCOUNT_ID,
+    name: 'Bob',
+    type: 'CUSTOMER',
+  },
+]
+
 // ============================================
 // SIDEBAR MENU
 // ============================================
@@ -32,6 +45,9 @@ const menuItems = [
 ]
 
 function App() {
+  const [activePage, setActivePage] = useState<'Dashboard' | 'Accounts'>(
+    'Dashboard'
+  )
 
   // ============================================
   // ACCOUNT BALANCES STATE
@@ -357,24 +373,25 @@ function App() {
           <nav aria-label="Main navigation">
 
             {menuItems.map((item, index) => (
-
-              <div
+              <button
                 key={item.label}
-                className={`menu-item ${index === 0 ? 'active' : ''}`}
+                type="button"
+                className={`menu-item ${
+                  activePage === item.label ? 'active' : ''
+                }`}
+                disabled={index > 1}
+                onClick={() => {
+                  setActivePage(index === 0 ? 'Dashboard' : 'Accounts')
+                }}
               >
-
                 <span className="menu-icon">
                   {item.icon}
                 </span>
 
                 <span>{item.label}</span>
 
-                {index !== 0 && (
-                  <small>Soon</small>
-                )}
-
-              </div>
-
+                {index > 1 && <small>Soon</small>}
+              </button>
             ))}
 
           </nav>
@@ -406,7 +423,7 @@ function App() {
 
           <div>
             <span className="breadcrumb">
-              Workspace / Overview
+              Workspace / {activePage}
             </span>
           </div>
 
@@ -429,18 +446,19 @@ function App() {
         <section className="page-heading">
 
           <div>
-
             <p className="eyebrow">
-              FINANCIAL OVERVIEW
+              {activePage === 'Dashboard'
+                ? 'FINANCIAL OVERVIEW'
+                : 'ACCOUNT MANAGEMENT'}
             </p>
 
-            <h1>Dashboard</h1>
+            <h1>{activePage}</h1>
 
             <p>
-              Monitor financial activity, account balances,
-              and transaction risk.
+              {activePage === 'Dashboard'
+                ? 'Monitor financial activity, account balances, and transaction risk.'
+                : 'View customer accounts and their current balances.'}
             </p>
-
           </div>
 
           <button
@@ -457,7 +475,9 @@ function App() {
         {/* STATISTICS */}
         {/* ===================================== */}
 
-        <section className="stats-grid">
+        {activePage === 'Dashboard' && (
+          <>
+          <section className="stats-grid">
 
           {/* TOTAL BALANCE */}
 
@@ -783,6 +803,106 @@ function App() {
           </div>
 
         </section>
+          </>
+        )}
+
+        {/* ============================================ */}
+        {/* ACCOUNTS PAGE */}
+        {/* ============================================ */}
+
+        {activePage === 'Accounts' && (
+
+          <section className="accounts-page">
+
+            <div className="accounts-header">
+              <div>
+                <h2>Customer Accounts</h2>
+
+                <p>
+                  Real account balances retrieved from PostgreSQL.
+                </p>
+              </div>
+
+              <span className="panel-tag">
+                LIVE DATA
+              </span>
+            </div>
+
+            <div className="account-grid">
+
+              {customerAccounts.map((account) => {
+
+                const accountBalance = balances?.find(
+                  (item) => item.account_id === account.id
+                )
+
+                return (
+
+                  <article className="account-card" key={account.id}>
+
+                    <div className="account-card-top">
+
+                      <div className="account-avatar">
+                        {account.name.charAt(0)}
+                      </div>
+
+                      <span className="account-status">
+                        CUSTOMER
+                      </span>
+
+                    </div>
+
+                    <h3>{account.name}</h3>
+
+                    <p className="account-id">
+                      {account.id}
+                    </p>
+
+                    <div className="account-balance">
+
+                      <span>Available Balance</span>
+
+                      <h2>
+                        {accountBalance
+                          ? accountBalance.balance_cents.toLocaleString('en-US')
+                          : balanceError
+                            ? 'Unavailable'
+                            : 'Loading...'
+                        }
+
+                        {accountBalance && (
+                          <small> cents</small>
+                        )}
+                      </h2>
+
+                    </div>
+
+                    <div className="account-footer">
+
+                      <span>Currency</span>
+
+                      <strong>
+                        {accountBalance?.currency ?? 'TND'}
+                      </strong>
+
+                    </div>
+
+                  </article>
+
+                )
+              })}
+
+            </div>
+
+            {balanceError && (
+              <p className="transfer-error" role="alert">
+                Could not retrieve account balances from FastAPI.
+              </p>
+            )}
+
+          </section>
+
+        )}
 
         {/* FOOTER */}
 
