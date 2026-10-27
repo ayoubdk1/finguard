@@ -138,3 +138,66 @@ export async function createTransfer(
 
     return response.json() as Promise<TransferResponse>
 }
+// ============================================
+// FRAUD RISK ASSESSMENT
+// ============================================
+
+export interface RiskAssessmentRequest {
+  amount_cents: number
+  transfers_last_10min: number
+  account_age_minutes: number
+  failed_transfers_last_hour: number
+}
+
+export interface RiskAssessmentResponse {
+  rule_assessment: {
+    score: number
+    decision: string
+    reason_codes: string[]
+  }
+
+  ml_assessment: {
+    ml_prediction: string
+    fraud_probability: number
+    model?: string
+  }
+
+  review_recommended: boolean
+  automatic_block: boolean
+}
+
+export async function assessRisk(
+  payload: RiskAssessmentRequest
+): Promise<RiskAssessmentResponse> {
+
+  const response = await fetch('/api/risk/assess', {
+    method: 'POST',
+
+    headers: {
+      'Content-Type': 'application/json',
+    },
+
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorData: unknown = await response
+      .json()
+      .catch(() => null)
+
+    let message = `Risk assessment failed (HTTP ${response.status})`
+
+    if (
+      errorData !== null &&
+      typeof errorData === 'object' &&
+      'detail' in errorData &&
+      typeof errorData.detail === 'string'
+    ) {
+      message = errorData.detail
+    }
+
+    throw new Error(message)
+  }
+
+  return response.json() as Promise<RiskAssessmentResponse>
+}

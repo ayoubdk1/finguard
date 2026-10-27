@@ -4,9 +4,11 @@ import {
   getAccountBalance,
   getAccountTransactions,
   createTransfer,
+  assessRisk,
   type AccountBalance,
   type TransactionHistoryItem,
   type TransferResponse,
+  type RiskAssessmentResponse,
 } from './services/api'
 
 import './App.css'
@@ -77,8 +79,25 @@ async function loadAccountMovements(): Promise<AccountMovement[]> {
 
 function App() {
   const [activePage, setActivePage] = useState<
-    'Dashboard' | 'Accounts' | 'Transactions'
+    'Dashboard' | 'Accounts' | 'Transactions' | 'Fraud Detection'
   >('Dashboard')
+
+  // ============================================
+  // FRAUD DETECTION STATE
+  // ============================================
+
+  const [riskInputs, setRiskInputs] = useState({
+    amount_cents: '150000',
+    transfers_last_10min: '4',
+    account_age_minutes: '60',
+    failed_transfers_last_hour: '3',
+  })
+
+  const [riskLoading, setRiskLoading] = useState(false)
+  const [riskError, setRiskError] = useState('')
+
+  const [riskResult, setRiskResult] =
+    useState<RiskAssessmentResponse | null>(null)
 
   // ============================================
   // ACCOUNT BALANCES STATE
@@ -443,6 +462,91 @@ function App() {
   }
 
   // ============================================
+  // FRAUD RISK ASSESSMENT
+  // ============================================
+
+  function updateRiskInput(
+    field: keyof typeof riskInputs,
+    value: string
+  ) {
+    setRiskInputs((current) => ({
+      ...current,
+      [field]: value,
+    }))
+
+    // Clear results when inputs change
+    setRiskResult(null)
+    setRiskError('')
+  }
+
+  async function handleAssessRisk(
+    event: FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault()
+
+    if (riskLoading) return
+
+    const rawValues = [
+      riskInputs.amount_cents,
+      riskInputs.transfers_last_10min,
+      riskInputs.account_age_minutes,
+      riskInputs.failed_transfers_last_hour,
+    ]
+
+    // Only non-negative whole numbers are accepted
+    const valid = rawValues.every((value) => {
+      return (
+        /^(0|[1-9]\d*)$/.test(value) &&
+        Number.isSafeInteger(Number(value))
+      )
+    })
+
+    if (!valid) {
+      setRiskError(
+        'All fields must contain valid non-negative whole numbers.'
+      )
+      return
+    }
+
+    const [
+      amount,
+      transfers,
+      accountAge,
+      failedTransfers,
+    ] = rawValues.map(Number)
+
+    if (amount <= 0) {
+      setRiskError('Transaction amount must be greater than zero.')
+      return
+    }
+
+    setRiskLoading(true)
+    setRiskError('')
+    setRiskResult(null)
+
+    try {
+      const result = await assessRisk({
+        amount_cents: amount,
+        transfers_last_10min: transfers,
+        account_age_minutes: accountAge,
+        failed_transfers_last_hour: failedTransfers,
+      })
+
+      setRiskResult(result)
+
+    } catch (error) {
+      setRiskError(
+        error instanceof Error
+          ? error.message
+          : 'Fraud assessment failed.'
+      )
+
+    } finally {
+      setRiskLoading(false)
+    }
+  }
+
+  // ============================================
   // DASHBOARD INTERFACE
   // ============================================
 
@@ -471,11 +575,11 @@ function App() {
           <nav aria-label="Main navigation">
 
             {menuItems.map((item) => {
-              const available = (
+              const available =
                 item.label === 'Dashboard' ||
                 item.label === 'Accounts' ||
-                item.label === 'Transactions'
-              )
+                item.label === 'Transactions' ||
+                item.label === 'Fraud Detection'
 
               return (
                 <button
@@ -489,7 +593,8 @@ function App() {
                     if (
                       item.label === 'Dashboard' ||
                       item.label === 'Accounts' ||
-                      item.label === 'Transactions'
+                      item.label === 'Transactions' ||
+                      item.label === 'Fraud Detection'
                     ) {
                       setActivePage(item.label)
                     }
@@ -560,7 +665,9 @@ function App() {
                 ? 'FINANCIAL OVERVIEW'
                 : activePage === 'Accounts'
                   ? 'ACCOUNT MANAGEMENT'
-                  : 'FINANCIAL ACTIVITY'}
+                  : activePage === 'Transactions'
+                    ? 'FINANCIAL ACTIVITY'
+                    : 'FRAUD INTELLIGENCE'}
             </p>
 
             <h1>{activePage}</h1>
@@ -570,7 +677,9 @@ function App() {
                 ? 'Monitor financial activity, account balances, and transaction risk.'
                 : activePage === 'Accounts'
                   ? 'View customer accounts and their current balances.'
-                  : 'Explore real transaction history across customer accounts.'}
+                  : activePage === 'Transactions'
+                    ? 'Explore real transaction history across customer accounts.'
+                    : 'Analyze transaction risk using rules and machine learning.'}
             </p>
           </div>
 
@@ -1213,6 +1322,271 @@ function App() {
               Transfers between Alice and Bob appear as two account
               movements: one debit and one credit.
             </p>
+
+          </section>
+
+        )}
+
+        {/* ============================================ */}
+        {/* FRAUD DETECTION PAGE */}
+        {/* ============================================ */}
+
+        {activePage === 'Fraud Detection' && (
+
+          <section className="risk-page">
+
+            <div className="risk-page-header">
+              <div>
+                <h2>Fraud Risk Assessment</h2>
+
+                <p>
+                  Analyze simulated transaction behavior using
+                  FinGuard's risk detection engine.
+                </p>
+              </div>
+
+              <span className="panel-tag">
+                FASTAPI + ML
+              </span>
+            </div>
+
+            <div className="risk-grid">
+
+              {/* RISK ASSESSMENT FORM */}
+
+              <div className="panel risk-form-panel">
+
+                <div className="panel-header">
+                  <div>
+                    <h3>Transaction Analysis</h3>
+                    <p>Enter transaction characteristics</p>
+                  </div>
+                </div>
+
+                <form
+                  className="risk-form"
+                  onSubmit={(event) => void handleAssessRisk(event)}
+                >
+
+                  <label htmlFor="risk-amount">
+                    Transaction Amount (cents)
+                  </label>
+
+                  <input
+                    id="risk-amount"
+                    type="text"
+                    inputMode="numeric"
+                    value={riskInputs.amount_cents}
+                    onChange={(event) =>
+                      updateRiskInput(
+                        'amount_cents',
+                        event.target.value
+                      )
+                    }
+                    placeholder="Example: 150000"
+                    required
+                  />
+
+                  <label htmlFor="risk-frequency">
+                    Transfers in Last 10 Minutes
+                  </label>
+
+                  <input
+                    id="risk-frequency"
+                    type="text"
+                    inputMode="numeric"
+                    value={riskInputs.transfers_last_10min}
+                    onChange={(event) =>
+                      updateRiskInput(
+                        'transfers_last_10min',
+                        event.target.value
+                      )
+                    }
+                    placeholder="Example: 4"
+                    required
+                  />
+
+                  <label htmlFor="risk-age">
+                    Account Age (minutes)
+                  </label>
+
+                  <input
+                    id="risk-age"
+                    type="text"
+                    inputMode="numeric"
+                    value={riskInputs.account_age_minutes}
+                    onChange={(event) =>
+                      updateRiskInput(
+                        'account_age_minutes',
+                        event.target.value
+                      )
+                    }
+                    placeholder="Example: 60"
+                    required
+                  />
+
+                  <label htmlFor="risk-failed">
+                    Failed Transfers in Last Hour
+                  </label>
+
+                  <input
+                    id="risk-failed"
+                    type="text"
+                    inputMode="numeric"
+                    value={riskInputs.failed_transfers_last_hour}
+                    onChange={(event) =>
+                      updateRiskInput(
+                        'failed_transfers_last_hour',
+                        event.target.value
+                      )
+                    }
+                    placeholder="Example: 3"
+                    required
+                  />
+
+                  {riskError && (
+                    <p className="transfer-error" role="alert">
+                      {riskError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="primary-button risk-submit"
+                    disabled={riskLoading}
+                  >
+                    {riskLoading
+                      ? 'Analyzing Transaction...'
+                      : '◇ Analyze Transaction'}
+                  </button>
+
+                </form>
+
+              </div>
+
+              {/* RISK ASSESSMENT RESULTS */}
+
+              <div className="panel risk-results-panel">
+
+                <div className="panel-header">
+                  <div>
+                    <h3>Risk Assessment Results</h3>
+                    <p>Rule engine and machine learning</p>
+                  </div>
+                </div>
+
+                {!riskResult ? (
+
+                  <div className="risk-empty">
+                    <div className="risk-empty-icon">◇</div>
+
+                    <h3>No assessment yet</h3>
+
+                    <p>
+                      Enter transaction characteristics and click
+                      Analyze Transaction to see the results.
+                    </p>
+                  </div>
+
+                ) : (
+
+                  <div
+                    className="risk-results"
+                    aria-live="polite"
+                  >
+
+                    <div className="risk-score-card">
+
+                      <span>Rule-Based Risk Score</span>
+
+                      <h2>
+                        {riskResult.rule_assessment.score}
+                      </h2>
+
+                      <p>
+                        Decision: {riskResult.rule_assessment.decision}
+                      </p>
+
+                    </div>
+
+                    <div className="risk-result-row">
+                      <span>ML Prediction</span>
+
+                      <strong>
+                        {riskResult.ml_assessment.ml_prediction}
+                      </strong>
+                    </div>
+
+                    <div className="risk-result-row">
+                      <span>Fraud Probability</span>
+
+                      <strong>
+                        {(
+                          riskResult.ml_assessment.fraud_probability * 100
+                        ).toFixed(1)}%
+                      </strong>
+                    </div>
+
+                    <div className="risk-result-row">
+                      <span>Manual Review</span>
+
+                      <span
+                        className={`risk-pill ${
+                          riskResult.review_recommended
+                            ? 'risk-warn'
+                            : 'risk-ok'
+                        }`}
+                      >
+                        {riskResult.review_recommended
+                          ? 'Recommended'
+                          : 'Not Recommended'}
+                      </span>
+                    </div>
+
+                    <div className="risk-result-row">
+                      <span>Automatic Block</span>
+
+                      <strong>
+                        {riskResult.automatic_block ? 'Yes' : 'No'}
+                      </strong>
+                    </div>
+
+                    <div className="risk-reasons">
+
+                      <h4>Risk Indicators</h4>
+
+                      {riskResult.rule_assessment.reason_codes.length === 0 ? (
+
+                        <p>No rule-based risk indicators triggered.</p>
+
+                      ) : (
+
+                        <ul>
+                          {riskResult.rule_assessment.reason_codes.map(
+                            (reason, index) => (
+                              <li key={`${reason}-${index}`}>
+                                {reason.replaceAll('_', ' ')}
+                              </li>
+                            )
+                          )}
+                        </ul>
+
+                      )}
+
+                    </div>
+
+                    <div className="risk-info">
+                      This is an advisory risk assessment.
+                      It does not execute, reject or block a transfer.
+                    </div>
+
+                  </div>
+
+                )}
+
+              </div>
+
+            </div>
 
           </section>
 

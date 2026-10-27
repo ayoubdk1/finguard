@@ -957,3 +957,225 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================
+   FRAUD DETECTION PAGE
+============================================ */
+
+.risk-page {
+  padding: 0 38px 35px;
+}
+
+.risk-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 25px;
+}
+
+.risk-page-header h2 {
+  font-size: 21px;
+  color: #172439;
+}
+
+.risk-page-header p {
+  font-size: 13px;
+  color: #8996a8;
+  margin-top: 8px;
+}
+
+.risk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.risk-form-panel,
+.risk-results-panel {
+  padding: 25px;
+}
+
+.risk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.risk-form label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #35445a;
+  margin-top: 10px;
+}
+
+.risk-form input {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #dce3ec;
+  border-radius: 9px;
+  background: white;
+  color: #172439;
+  font: inherit;
+  font-size: 13px;
+}
+
+.risk-form input:focus {
+  outline: 2px solid #14bea0;
+  outline-offset: 1px;
+}
+
+.risk-submit {
+  width: 100%;
+  margin-top: 20px;
+}
+
+.risk-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* EMPTY RESULTS */
+
+.risk-empty {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.risk-empty-icon {
+  font-size: 45px;
+  color: #13b995;
+  margin-bottom: 20px;
+}
+
+.risk-empty h3 {
+  color: #172439;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.risk-empty p {
+  color: #8996a8;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* RESULTS */
+
+.risk-results {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.risk-score-card {
+  background: #edf9f5;
+  padding: 25px;
+  border-radius: 13px;
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.risk-score-card span {
+  font-size: 12px;
+  color: #118a70;
+  font-weight: 700;
+}
+
+.risk-score-card h2 {
+  font-size: 45px;
+  color: #0da783;
+  margin: 12px 0;
+}
+
+.risk-score-card p {
+  font-size: 12px;
+  color: #526078;
+}
+
+.risk-result-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  padding: 12px 0;
+  border-bottom: 1px solid #edf0f5;
+  font-size: 13px;
+}
+
+.risk-result-row > span:first-child {
+  color: #8996a8;
+}
+
+.risk-result-row strong {
+  color: #172439;
+  text-align: right;
+}
+
+.risk-pill {
+  padding: 7px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.risk-warn {
+  color: #b7791f;
+  background: #fff3d8;
+}
+
+.risk-ok {
+  color: #0da783;
+  background: #e4f9f1;
+}
+
+/* RISK REASONS */
+
+.risk-reasons {
+  margin-top: 15px;
+}
+
+.risk-reasons h4 {
+  font-size: 13px;
+  color: #172439;
+  margin-bottom: 15px;
+}
+
+.risk-reasons ul {
+  padding-left: 20px;
+}
+
+.risk-reasons li {
+  color: #526078;
+  font-size: 12px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.risk-reasons p {
+  font-size: 12px;
+  color: #8996a8;
+}
+
+.risk-info {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 9px;
+  background: #f0f5fa;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .risk-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .risk-page {
+    padding: 0 20px 25px;
+  }
+}
