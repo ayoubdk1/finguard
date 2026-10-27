@@ -44,10 +44,41 @@ const menuItems = [
   { icon: '◉', label: 'Event Monitoring' },
 ]
 
-function App() {
-  const [activePage, setActivePage] = useState<'Dashboard' | 'Accounts'>(
-    'Dashboard'
+type AccountMovement = TransactionHistoryItem & {
+  accountId: string
+  accountName: string
+}
+
+async function loadAccountMovements(): Promise<AccountMovement[]> {
+  const [aliceHistory, bobHistory] = await Promise.all([
+    getAccountTransactions(ALICE_ACCOUNT_ID),
+    getAccountTransactions(BOB_ACCOUNT_ID),
+  ])
+
+  const movements: AccountMovement[] = [
+    ...aliceHistory.transactions.map((tx) => ({
+      ...tx,
+      accountId: ALICE_ACCOUNT_ID,
+      accountName: 'Alice',
+    })),
+    ...bobHistory.transactions.map((tx) => ({
+      ...tx,
+      accountId: BOB_ACCOUNT_ID,
+      accountName: 'Bob',
+    })),
+  ]
+
+  return movements.sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() -
+      new Date(a.created_at).getTime()
   )
+}
+
+function App() {
+  const [activePage, setActivePage] = useState<
+    'Dashboard' | 'Accounts' | 'Transactions'
+  >('Dashboard')
 
   // ============================================
   // ACCOUNT BALANCES STATE
@@ -83,6 +114,21 @@ function App() {
 
   const [transferRequestKey, setTransferRequestKey] =
     useState(() => crypto.randomUUID())
+
+  // ============================================
+  // TRANSACTIONS PAGE STATE
+  // ============================================
+
+  const [allMovements, setAllMovements] = useState<AccountMovement[]>([])
+
+  const [movementFilter, setMovementFilter] = useState<
+    'all' | 'alice' | 'bob'
+  >('all')
+
+  const [movementsLoading, setMovementsLoading] = useState(true)
+  const [movementsError, setMovementsError] = useState('')
+
+  const [movementsRefreshKey, setMovementsRefreshKey] = useState(0)
 
   // ============================================
   // LOAD REAL ACCOUNT BALANCES
@@ -174,6 +220,55 @@ function App() {
     (total, account) => total + account.balance_cents,
     0
   )
+
+  // ============================================
+  // LOAD ACCOUNT TRANSACTIONS
+  // ============================================
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchMovements() {
+      setMovementsLoading(true)
+
+      try {
+        const results = await loadAccountMovements()
+
+        if (!cancelled) {
+          setAllMovements(results)
+          setMovementsError('')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMovementsError(
+            error instanceof Error
+              ? error.message
+              : 'Unable to load transactions'
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setMovementsLoading(false)
+        }
+      }
+    }
+
+    void fetchMovements()
+
+    return () => {
+      cancelled = true
+    }
+  }, [movementsRefreshKey])
+
+  const visibleMovements = allMovements.filter((tx) => {
+    if (movementFilter === 'all') return true
+
+    return tx.accountId === (
+      movementFilter === 'alice'
+        ? ALICE_ACCOUNT_ID
+        : BOB_ACCOUNT_ID
+    )
+  })
 
   // ============================================
   // TRANSFER MODAL HANDLERS
@@ -277,6 +372,9 @@ function App() {
       // 2. Save the successful response
       setTransferResult(result)
 
+      // Refresh the Transactions page after a successful transfer
+      setMovementsRefreshKey((current) => current + 1)
+
       // 3. Immediately update displayed balances
       setBalances((current) =>
         current?.map((account) => {
@@ -372,27 +470,38 @@ function App() {
 
           <nav aria-label="Main navigation">
 
-            {menuItems.map((item, index) => (
-              <button
-                key={item.label}
-                type="button"
-                className={`menu-item ${
-                  activePage === item.label ? 'active' : ''
-                }`}
-                disabled={index > 1}
-                onClick={() => {
-                  setActivePage(index === 0 ? 'Dashboard' : 'Accounts')
-                }}
-              >
-                <span className="menu-icon">
-                  {item.icon}
-                </span>
+            {menuItems.map((item) => {
+              const available = (
+                item.label === 'Dashboard' ||
+                item.label === 'Accounts' ||
+                item.label === 'Transactions'
+              )
 
-                <span>{item.label}</span>
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  className={`menu-item ${
+                    activePage === item.label ? 'active' : ''
+                  }`}
+                  disabled={!available}
+                  onClick={() => {
+                    if (
+                      item.label === 'Dashboard' ||
+                      item.label === 'Accounts' ||
+                      item.label === 'Transactions'
+                    ) {
+                      setActivePage(item.label)
+                    }
+                  }}
+                >
+                  <span className="menu-icon">{item.icon}</span>
+                  <span>{item.label}</span>
 
-                {index > 1 && <small>Soon</small>}
-              </button>
-            ))}
+                  {!available && <small>Soon</small>}
+                </button>
+              )
+            })}
 
           </nav>
 
@@ -449,7 +558,9 @@ function App() {
             <p className="eyebrow">
               {activePage === 'Dashboard'
                 ? 'FINANCIAL OVERVIEW'
-                : 'ACCOUNT MANAGEMENT'}
+                : activePage === 'Accounts'
+                  ? 'ACCOUNT MANAGEMENT'
+                  : 'FINANCIAL ACTIVITY'}
             </p>
 
             <h1>{activePage}</h1>
@@ -457,7 +568,9 @@ function App() {
             <p>
               {activePage === 'Dashboard'
                 ? 'Monitor financial activity, account balances, and transaction risk.'
-                : 'View customer accounts and their current balances.'}
+                : activePage === 'Accounts'
+                  ? 'View customer accounts and their current balances.'
+                  : 'Explore real transaction history across customer accounts.'}
             </p>
           </div>
 
@@ -899,6 +1012,207 @@ function App() {
                 Could not retrieve account balances from FastAPI.
               </p>
             )}
+
+          </section>
+
+        )}
+
+        {/* ============================================ */}
+        {/* TRANSACTIONS PAGE */}
+        {/* ============================================ */}
+
+        {activePage === 'Transactions' && (
+
+          <section className="transactions-page">
+
+            <div className="transactions-page-header">
+              <div>
+                <h2>Transaction History</h2>
+                <p>
+                  Financial movements retrieved from PostgreSQL.
+                </p>
+              </div>
+
+              <span className="panel-tag">
+                {movementsLoading
+                  ? 'LOADING'
+                  : movementsError
+                    ? 'API ERROR'
+                    : 'LIVE DATA'}
+              </span>
+            </div>
+
+            {/* ACCOUNT FILTERS */}
+
+            <div
+              className="transaction-filters"
+              role="group"
+              aria-label="Filter transactions by account"
+            >
+              {(['all', 'alice', 'bob'] as const).map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  className={`filter-button ${
+                    movementFilter === filter ? 'selected' : ''
+                  }`}
+                  onClick={() => setMovementFilter(filter)}
+                >
+                  {filter === 'all'
+                    ? 'All Accounts'
+                    : filter === 'alice'
+                      ? 'Alice'
+                      : 'Bob'}
+                </button>
+              ))}
+            </div>
+
+            {/* TRANSACTION SUMMARY */}
+
+            <div className="transaction-summary">
+              <div>
+                <span>Account movements</span>
+                <h2>
+                  {movementsLoading || movementsError
+                    ? '—'
+                    : visibleMovements.length}
+                </h2>
+              </div>
+
+              <div>
+                <span>Selected Account</span>
+                <h2>
+                  {movementFilter === 'all'
+                    ? 'All'
+                    : movementFilter === 'alice'
+                      ? 'Alice'
+                      : 'Bob'}
+                </h2>
+              </div>
+            </div>
+
+            {/* TRANSACTIONS TABLE */}
+
+            <div className="panel">
+
+              <div className="panel-header">
+                <div>
+                  <h3>Financial Activity</h3>
+                  <p>Newest account movements first</p>
+                </div>
+              </div>
+
+              <div className="table-wrapper">
+
+                <table>
+
+                  <thead>
+                    <tr>
+                      <th>ACCOUNT</th>
+                      <th>TRANSACTION</th>
+                      <th>DATE</th>
+                      <th>AMOUNT</th>
+                      <th>STATUS</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+
+                    {movementsLoading ? (
+
+                      <tr>
+                        <td colSpan={5}>
+                          Loading transaction history...
+                        </td>
+                      </tr>
+
+                    ) : movementsError ? (
+
+                      <tr>
+                        <td colSpan={5}>
+                          Unable to load transactions: {movementsError}
+                        </td>
+                      </tr>
+
+                    ) : visibleMovements.length === 0 ? (
+
+                      <tr>
+                        <td colSpan={5}>
+                          No transactions found.
+                        </td>
+                      </tr>
+
+                    ) : (
+
+                      visibleMovements.map((tx) => (
+
+                        <tr
+                          key={`${tx.accountId}-${tx.transaction_id}`}
+                        >
+
+                          <td>
+                            <strong>{tx.accountName}</strong>
+                          </td>
+
+                          <td>
+                            <div className="transaction-name">
+                              {tx.description || 'Financial transaction'}
+                            </div>
+
+                            <span className="transaction-id">
+                              {tx.transaction_id}
+                            </span>
+                          </td>
+
+                          <td>
+                            {new Date(tx.created_at).toLocaleString(
+                              'en-GB',
+                              {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }
+                            )}
+                          </td>
+
+                          <td
+                            className={`amount-cell ${
+                              tx.amount_cents >= 0
+                                ? 'positive-amount'
+                                : 'negative-amount'
+                            }`}
+                          >
+                            {tx.amount_cents > 0 ? '+' : ''}
+                            {tx.amount_cents.toLocaleString('en-US')}
+                            {' cents'}
+                          </td>
+
+                          <td>
+                            <span className="status-badge">
+                              {tx.status}
+                            </span>
+                          </td>
+
+                        </tr>
+
+                      ))
+
+                    )}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </div>
+
+            <p className="transaction-note">
+              Transfers between Alice and Bob appear as two account
+              movements: one debit and one credit.
+            </p>
 
           </section>
 
