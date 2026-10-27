@@ -491,3 +491,216 @@ td {
     padding: 25px 20px;
   }
 }
+
+/* ============================================
+   TRANSFER MODAL
+============================================ */
+
+.transfer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 19, 36, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.transfer-modal {
+  background: #ffffff;
+  width: 100%;
+  max-width: 490px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border-radius: 18px;
+  padding: 30px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.transfer-modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 25px;
+}
+
+.transfer-modal-header h2 {
+  color: #172439;
+  font-size: 25px;
+  margin-bottom: 8px;
+}
+
+.transfer-modal-header p:not(.eyebrow) {
+  font-size: 12px;
+  color: #8592a6;
+}
+
+.close-modal {
+  border: none;
+  background: #f1f4f8;
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  font-size: 22px;
+  cursor: pointer;
+  color: #526078;
+}
+
+.transfer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transfer-form label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #35445a;
+  margin-top: 8px;
+}
+
+.transfer-form input,
+.transfer-form select,
+.transfer-form textarea {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #dce3ec;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #172439;
+  font: inherit;
+  font-size: 13px;
+}
+
+.transfer-form input:focus,
+.transfer-form select:focus,
+.transfer-form textarea:focus {
+  outline: 2px solid #14bea0;
+  outline-offset: 1px;
+}
+
+.transfer-error {
+  background: #fff0f0;
+  color: #c0392b;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.transfer-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.secondary-button {
+  padding: 13px 20px;
+  border: 1px solid #dce3ec;
+  background: white;
+  color: #526078;
+  border-radius: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.transfer-review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid #edf0f5;
+  font-size: 13px;
+}
+
+.review-row span {
+  color: #8190a4;
+}
+
+.review-row strong {
+  color: #172439;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.transfer-info {
+  background: #edf9f5;
+  color: #118a70;
+  border-radius: 9px;
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.transfer-review .primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .transfer-modal {
+    padding: 20px;
+  }
+
+  .transfer-actions {
+    flex-direction: column;
+  }
+
+  .transfer-actions button {
+    width: 100%;
+  }
+}
+
+/* ============================================
+   TRANSFER SUCCESS
+============================================ */
+
+.transfer-success {
+  text-align: center;
+  padding: 15px 0;
+}
+
+.success-icon {
+  width: 65px;
+  height: 65px;
+  background: #e4f9f1;
+  color: #12a982;
+  font-size: 32px;
+  font-weight: bold;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.transfer-success h3 {
+  color: #172439;
+  font-size: 23px;
+  margin-bottom: 10px;
+}
+
+.transfer-success > p {
+  color: #8190a4;
+  font-size: 13px;
+  margin-bottom: 25px;
+  line-height: 1.6;
+}
+
+.transfer-success .review-row {
+  text-align: left;
+}
+
+.transfer-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

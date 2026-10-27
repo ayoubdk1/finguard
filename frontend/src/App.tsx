@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   getAccountBalance,
   getAccountTransactions,
+  createTransfer,
   type AccountBalance,
   type TransactionHistoryItem,
+  type TransferResponse,
 } from './services/api'
 
 import './App.css'
@@ -45,6 +47,26 @@ function App() {
   const [transactions, setTransactions] = useState<TransactionHistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
+
+  // ============================================
+  // TRANSFER MODAL STATE
+  // ============================================
+
+  const [showTransferModal, setShowTransferModal] = useState(false)
+  const [isTransferReview, setIsTransferReview] = useState(false)
+  const [transferFrom, setTransferFrom] = useState(ALICE_ACCOUNT_ID)
+  const [transferTo, setTransferTo] = useState(BOB_ACCOUNT_ID)
+  const [transferAmount, setTransferAmount] = useState('')
+  const [transferDescription, setTransferDescription] = useState('')
+  const [transferFormError, setTransferFormError] = useState('')
+
+  const [transferSubmitting, setTransferSubmitting] = useState(false)
+
+  const [transferResult, setTransferResult] =
+    useState<TransferResponse | null>(null)
+
+  const [transferRequestKey, setTransferRequestKey] =
+    useState(() => crypto.randomUUID())
 
   // ============================================
   // LOAD REAL ACCOUNT BALANCES
@@ -136,6 +158,175 @@ function App() {
     (total, account) => total + account.balance_cents,
     0
   )
+
+  // ============================================
+  // TRANSFER MODAL HANDLERS
+  // ============================================
+
+  function getAccountName(accountId: string) {
+    if (accountId === ALICE_ACCOUNT_ID) {
+      return 'Alice — TND'
+    }
+    if (accountId === BOB_ACCOUNT_ID) {
+      return 'Bob — TND'
+    }
+    return accountId
+  }
+
+  function openTransferModal() {
+    setTransferFrom(ALICE_ACCOUNT_ID)
+    setTransferTo(BOB_ACCOUNT_ID)
+
+    setTransferAmount('')
+    setTransferDescription('')
+
+    setTransferFormError('')
+    setIsTransferReview(false)
+
+    setTransferSubmitting(false)
+    setTransferResult(null)
+
+    // Unique key for each NEW transfer
+    setTransferRequestKey(crypto.randomUUID())
+
+    setShowTransferModal(true)
+  }
+
+  function closeTransferModal() {
+    if (transferSubmitting) return
+
+    setShowTransferModal(false)
+    setIsTransferReview(false)
+    setTransferFormError('')
+  }
+
+  function handleReviewTransfer(event: FormEvent) {
+    event.preventDefault()
+    setTransferFormError('')
+
+    if (transferFrom === transferTo) {
+      setTransferFormError('Source and destination accounts must be different')
+      return
+    }
+
+    const amount = Number(transferAmount)
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      setTransferFormError('Please enter a valid positive amount in cents')
+      return
+    }
+
+    setIsTransferReview(true)
+  }
+
+  // ============================================
+  // CONFIRM AND EXECUTE TRANSFER
+  // ============================================
+
+  async function handleConfirmTransfer() {
+    if (transferSubmitting || transferResult || !isTransferReview) {
+      return
+    }
+
+    const amount = Number(transferAmount)
+
+    // Validate amount again before submission
+    if (
+      !/^[1-9]\d*$/.test(transferAmount) ||
+      !Number.isSafeInteger(amount)
+    ) {
+      setTransferFormError('Invalid transfer amount.')
+      return
+    }
+
+    if (transferFrom === transferTo) {
+      setTransferFormError('Choose different accounts.')
+      return
+    }
+
+    setTransferSubmitting(true)
+    setTransferFormError('')
+
+    try {
+      // 1. Execute the simulated transfer
+      const result = await createTransfer(
+        {
+          source_account_id: transferFrom,
+          destination_account_id: transferTo,
+          amount_cents: amount,
+          description: transferDescription,
+        },
+        transferRequestKey
+      )
+
+      // 2. Save the successful response
+      setTransferResult(result)
+
+      // 3. Immediately update displayed balances
+      setBalances((current) =>
+        current?.map((account) => {
+          if (account.account_id === result.source_account_id) {
+            return {
+              ...account,
+              balance_cents: result.source_balance_cents,
+            }
+          }
+
+          if (account.account_id === result.destination_account_id) {
+            return {
+              ...account,
+              balance_cents: result.destination_balance_cents,
+            }
+          }
+
+          return account
+        }) ?? null
+      )
+
+      setBalanceError('')
+
+      // 4. Refresh balances from PostgreSQL
+      try {
+        const updatedBalances = await Promise.all([
+          getAccountBalance(ALICE_ACCOUNT_ID),
+          getAccountBalance(BOB_ACCOUNT_ID),
+        ])
+
+        setBalances(updatedBalances)
+      } catch (error) {
+        console.error('Balance refresh failed:', error)
+        // Keep balances returned by the successful transfer
+      }
+
+      // 5. Refresh transaction history
+      setHistoryLoading(true)
+
+      try {
+        const history = await getAccountTransactions(
+          ALICE_ACCOUNT_ID
+        )
+
+        setTransactions(history.transactions)
+        setHistoryError('')
+      } catch (error) {
+        console.error('Transaction history refresh failed:', error)
+
+        setHistoryError(
+          'Unable to refresh transaction history.'
+        )
+      } finally {
+        setHistoryLoading(false)
+      }
+
+    } catch (error) {
+      setTransferFormError(
+        error instanceof Error
+          ? error.message
+          : 'Transfer request failed. Retry using the same key.'
+      )
+    } finally {
+      setTransferSubmitting(false)
+    }
+  }
 
   // ============================================
   // DASHBOARD INTERFACE
@@ -252,7 +443,11 @@ function App() {
 
           </div>
 
-          <button className="primary-button" disabled>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={openTransferModal}
+          >
             + New Transfer
           </button>
 
@@ -596,6 +791,275 @@ function App() {
         </footer>
 
       </main>
+
+      {/* ============================================ */}
+      {/* NEW TRANSFER MODAL */}
+      {/* ============================================ */}
+
+      {showTransferModal && (
+
+        <div className="transfer-overlay" onClick={closeTransferModal}>
+
+          <section
+            className="transfer-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="transfer-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+
+            <div className="transfer-modal-header">
+
+              <div>
+                <p className="eyebrow">FINGUARD PAYMENTS</p>
+                <h2 id="transfer-title">
+                  {isTransferReview ? 'Review Transfer' : 'New Transfer'}
+                </h2>
+                <p>Secure simulated financial transaction</p>
+              </div>
+
+              <button
+                type="button"
+                className="close-modal"
+                onClick={closeTransferModal}
+                aria-label="Close transfer form"
+              >
+                ×
+              </button>
+
+            </div>
+
+            {transferResult ? (
+
+              <div className="transfer-success" role="status">
+
+                <div className="success-icon">✓</div>
+
+                <h3>Transfer Successful!</h3>
+
+                <p>
+                  Your simulated transfer has been posted successfully.
+                </p>
+
+                <div className="review-row">
+                  <span>Transaction ID</span>
+                  <strong>{transferResult.transaction_id}</strong>
+                </div>
+
+                <div className="review-row">
+                  <span>Amount</span>
+                  <strong>
+                    {transferResult.amount_cents.toLocaleString('en-US')} cents
+                  </strong>
+                </div>
+
+                <div className="review-row">
+                  <span>Status</span>
+                  <strong>{transferResult.status}</strong>
+                </div>
+
+                <div className="transfer-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={closeTransferModal}
+                  >
+                    Done
+                  </button>
+                </div>
+
+              </div>
+
+            ) : !isTransferReview ? (
+
+              <form
+                className="transfer-form"
+                onSubmit={handleReviewTransfer}
+              >
+
+                {/* SOURCE ACCOUNT */}
+
+                <label htmlFor="transfer-from">
+                  From Account
+                </label>
+
+                <select
+                  id="transfer-from"
+                  value={transferFrom}
+                  onChange={(event) => setTransferFrom(event.target.value)}
+                >
+                  <option value={ALICE_ACCOUNT_ID}>
+                    Alice — TND
+                  </option>
+
+                  <option value={BOB_ACCOUNT_ID}>
+                    Bob — TND
+                  </option>
+                </select>
+
+                {/* DESTINATION ACCOUNT */}
+
+                <label htmlFor="transfer-to">
+                  To Account
+                </label>
+
+                <select
+                  id="transfer-to"
+                  value={transferTo}
+                  onChange={(event) => setTransferTo(event.target.value)}
+                >
+                  <option value={ALICE_ACCOUNT_ID}>
+                    Alice — TND
+                  </option>
+
+                  <option value={BOB_ACCOUNT_ID}>
+                    Bob — TND
+                  </option>
+                </select>
+
+                {/* AMOUNT */}
+
+                <label htmlFor="transfer-amount">
+                  Amount (cents)
+                </label>
+
+                <input
+                  id="transfer-amount"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Example: 100"
+                  value={transferAmount}
+                  onChange={(event) => setTransferAmount(event.target.value)}
+                  required
+                />
+
+                {/* DESCRIPTION */}
+
+                <label htmlFor="transfer-description">
+                  Description
+                </label>
+
+                <textarea
+                  id="transfer-description"
+                  placeholder="Example: Payment to Bob"
+                  value={transferDescription}
+                  onChange={(event) =>
+                    setTransferDescription(event.target.value)
+                  }
+                  rows={3}
+                  maxLength={200}
+                />
+
+                {/* ERROR MESSAGE */}
+
+                {transferFormError && (
+                  <p className="transfer-error" role="alert">
+                    {transferFormError}
+                  </p>
+                )}
+
+                {/* ACTION BUTTONS */}
+
+                <div className="transfer-actions">
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={closeTransferModal}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="primary-button"
+                  >
+                    Review Transfer →
+                  </button>
+
+                </div>
+
+              </form>
+
+            ) : (
+
+              /* ==================================== */
+              /* TRANSFER CONFIRMATION PREVIEW */
+              /* ==================================== */
+
+              <div className="transfer-review">
+
+                <div className="review-row">
+                  <span>From</span>
+                  <strong>{getAccountName(transferFrom)}</strong>
+                </div>
+
+                <div className="review-row">
+                  <span>To</span>
+                  <strong>{getAccountName(transferTo)}</strong>
+                </div>
+
+                <div className="review-row">
+                  <span>Amount</span>
+                  <strong>
+                    {Number(transferAmount).toLocaleString('en-US')} cents
+                  </strong>
+                </div>
+
+                <div className="review-row">
+                  <span>Currency</span>
+                  <strong>TND</strong>
+                </div>
+
+                <div className="review-row">
+                  <span>Description</span>
+                  <strong>{transferDescription || 'No description'}</strong>
+                </div>
+
+                <div className="transfer-info">
+                  This is a simulated transfer.
+                  No transaction has been submitted yet.
+                </div>
+
+                {transferFormError && (
+                  <p className="transfer-error" role="alert">
+                    {transferFormError}
+                  </p>
+                )}
+
+                <div className="transfer-actions">
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setIsTransferReview(false)}
+                    disabled={transferSubmitting}
+                  >
+                    ← Edit
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void handleConfirmTransfer()}
+                    disabled={transferSubmitting}
+                  >
+                    {transferSubmitting
+                      ? 'Processing Transfer...'
+                      : 'Confirm Transfer'}
+                  </button>
+
+                </div>
+
+              </div>
+
+            )}
+
+          </section>
+
+        </div>
+
+      )}
 
     </div>
   )
