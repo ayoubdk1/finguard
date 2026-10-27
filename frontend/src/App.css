@@ -1423,3 +1423,42 @@ td {
 .events-table .events-status {
   white-space: nowrap;
 }
+
+/* ============================================
+   DATA REFRESH ACTIONS
+============================================ */
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.page-actions .secondary-button {
+  padding: 13px 20px;
+  border: 1px solid #dce3ec;
+  background: white;
+  color: #526078;
+  border-radius: 9px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.page-actions .secondary-button:hover {
+  background: #eaf8f4;
+  border-color: #13b995;
+  color: #0da783;
+}
+
+@media (max-width: 760px) {
+  .page-actions {
+    width: 100%;
+  }
+
+  .page-actions button {
+    flex: 1;
+  }
+}

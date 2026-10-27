@@ -114,6 +114,12 @@ function App() {
   >('Dashboard')
 
   // ============================================
+  // DATA REFRESH
+  // ============================================
+
+  const [overviewRefreshKey, setOverviewRefreshKey] = useState(0)
+
+  // ============================================
   // EVENT MONITORING STATES
   // ============================================
 
@@ -204,6 +210,9 @@ function App() {
     let cancelled = false
 
     async function loadBalances() {
+      setBalances(null)
+      setBalanceError('')
+
       try {
         const results = await Promise.all([
           getAccountBalance(ALICE_ACCOUNT_ID),
@@ -232,7 +241,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [overviewRefreshKey])
 
   // ============================================
   // LOAD REAL TRANSACTION HISTORY
@@ -242,6 +251,9 @@ function App() {
     let cancelled = false
 
     async function loadTransactions() {
+      setHistoryLoading(true)
+      setHistoryError('')
+
       try {
 
         const response = await getAccountTransactions(
@@ -276,7 +288,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [overviewRefreshKey])
 
   // ============================================
   // CALCULATE TOTAL BALANCE
@@ -646,6 +658,22 @@ function App() {
   }, [activePage, eventRefreshVersion])
 
   // ============================================
+  // REFRESH ALL DASHBOARD DATA
+  // ============================================
+
+  function refreshDashboardData() {
+
+    // Reload balances and dashboard transactions
+    setOverviewRefreshKey((current) => current + 1)
+
+    // Reload Alice and Bob's transaction movements
+    setMovementsRefreshKey((current) => current + 1)
+
+    // Reload event monitoring information
+    setEventRefreshVersion((current) => current + 1)
+  }
+
+  // ============================================
   // DASHBOARD INTERFACE
   // ============================================
 
@@ -788,13 +816,25 @@ function App() {
             </p>
           </div>
 
-          <button
-            className="primary-button"
-            type="button"
-            onClick={openTransferModal}
-          >
-            + New Transfer
-          </button>
+          <div className="page-actions">
+
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={refreshDashboardData}
+            >
+              ↻ Refresh Data
+            </button>
+
+            <button
+              type="button"
+              className="primary-button"
+              onClick={openTransferModal}
+            >
+              + New Transfer
+            </button>
+
+          </div>
 
         </section>
 
