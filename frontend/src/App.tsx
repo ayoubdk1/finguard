@@ -5,10 +5,12 @@ import {
   getAccountTransactions,
   createTransfer,
   assessRisk,
+  getEventMonitoring,
   type AccountBalance,
   type TransactionHistoryItem,
   type TransferResponse,
   type RiskAssessmentResponse,
+  type EventMonitoringResponse,
 } from './services/api'
 
 import './App.css'
@@ -79,8 +81,28 @@ async function loadAccountMovements(): Promise<AccountMovement[]> {
 
 function App() {
   const [activePage, setActivePage] = useState<
-    'Dashboard' | 'Accounts' | 'Transactions' | 'Fraud Detection'
+    | 'Dashboard'
+    | 'Accounts'
+    | 'Transactions'
+    | 'Fraud Detection'
+    | 'Event Monitoring'
   >('Dashboard')
+
+  // ============================================
+  // EVENT MONITORING STATES
+  // ============================================
+
+  const [eventMonitoring, setEventMonitoring] =
+    useState<EventMonitoringResponse | null>(null)
+
+  const [eventMonitoringLoading, setEventMonitoringLoading] =
+    useState(true)
+
+  const [eventMonitoringError, setEventMonitoringError] =
+    useState('')
+
+  const [eventRefreshVersion, setEventRefreshVersion] =
+    useState(0)
 
   // ============================================
   // FRAUD DETECTION STATE
@@ -547,6 +569,58 @@ function App() {
   }
 
   // ============================================
+  // LOAD EVENT MONITORING DATA
+  // ============================================
+
+  useEffect(() => {
+    if (activePage !== 'Event Monitoring') {
+      return
+    }
+
+    let cancelled = false
+
+    async function loadEvents(showLoading: boolean) {
+      if (showLoading) {
+        setEventMonitoringLoading(true)
+      }
+
+      try {
+        const data = await getEventMonitoring()
+
+        if (!cancelled) {
+          setEventMonitoring(data)
+          setEventMonitoringError('')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setEventMonitoringError(
+            error instanceof Error
+              ? error.message
+              : 'Failed to load event monitoring'
+          )
+        }
+      } finally {
+        if (!cancelled && showLoading) {
+          setEventMonitoringLoading(false)
+        }
+      }
+    }
+
+    // Load immediately when opening the page
+    void loadEvents(true)
+
+    // Automatically refresh every 10 seconds
+    const intervalId = window.setInterval(() => {
+      void loadEvents(false)
+    }, 10000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [activePage, eventRefreshVersion])
+
+  // ============================================
   // DASHBOARD INTERFACE
   // ============================================
 
@@ -579,7 +653,8 @@ function App() {
                 item.label === 'Dashboard' ||
                 item.label === 'Accounts' ||
                 item.label === 'Transactions' ||
-                item.label === 'Fraud Detection'
+                item.label === 'Fraud Detection' ||
+                item.label === 'Event Monitoring'
 
               return (
                 <button
@@ -594,7 +669,8 @@ function App() {
                       item.label === 'Dashboard' ||
                       item.label === 'Accounts' ||
                       item.label === 'Transactions' ||
-                      item.label === 'Fraud Detection'
+                      item.label === 'Fraud Detection' ||
+                      item.label === 'Event Monitoring'
                     ) {
                       setActivePage(item.label)
                     }
@@ -667,7 +743,9 @@ function App() {
                   ? 'ACCOUNT MANAGEMENT'
                   : activePage === 'Transactions'
                     ? 'FINANCIAL ACTIVITY'
-                    : 'FRAUD INTELLIGENCE'}
+                    : activePage === 'Fraud Detection'
+                      ? 'FRAUD INTELLIGENCE'
+                      : 'EVENT-DRIVEN ARCHITECTURE'}
             </p>
 
             <h1>{activePage}</h1>
@@ -679,7 +757,9 @@ function App() {
                   ? 'View customer accounts and their current balances.'
                   : activePage === 'Transactions'
                     ? 'Explore real transaction history across customer accounts.'
-                    : 'Analyze transaction risk using rules and machine learning.'}
+                    : activePage === 'Fraud Detection'
+                      ? 'Analyze transaction risk using rules and machine learning.'
+                      : 'Monitor transactional outbox events and consumer processing.'}
             </p>
           </div>
 
@@ -1587,6 +1667,281 @@ function App() {
               </div>
 
             </div>
+
+          </section>
+
+        )}
+
+        {/* ============================================ */}
+        {/* EVENT MONITORING PAGE */}
+        {/* ============================================ */}
+
+        {activePage === 'Event Monitoring' && (
+
+          <section className="events-page">
+
+            {/* HEADER */}
+
+            <div className="events-page-header">
+
+              <div>
+                <h2>Event Stream Monitoring</h2>
+
+                <p>
+                  Track PostgreSQL outbox publication and
+                  consumer processing.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setEventRefreshVersion((current) => current + 1)
+                }}
+              >
+                ↻ Refresh
+              </button>
+
+            </div>
+
+            {/* LOADING AND ERROR MESSAGES */}
+
+            {eventMonitoringLoading && (
+              <p className="events-message">
+                Loading event monitoring data...
+              </p>
+            )}
+
+            {eventMonitoringError && (
+              <p className="transfer-error" role="alert">
+                Monitoring API error: {eventMonitoringError}
+                {eventMonitoring
+                  ? ' Displaying the last successfully retrieved data.'
+                  : ''}
+              </p>
+            )}
+
+            {/* EVENT STATISTICS */}
+
+            {eventMonitoring && (
+
+              <>
+                <div className="events-stats-grid">
+
+                  <div className="events-stat-card">
+
+                    <span>Total Events</span>
+
+                    <h2>
+                      {eventMonitoring.total_events}
+                    </h2>
+
+                    <p>Created in PostgreSQL outbox</p>
+
+                  </div>
+
+                  <div className="events-stat-card">
+
+                    <span>Pending Events</span>
+
+                    <h2 className="events-pending-number">
+                      {eventMonitoring.pending_events}
+                    </h2>
+
+                    <p>Awaiting successful publication</p>
+
+                  </div>
+
+                  <div className="events-stat-card">
+
+                    <span>Published Events</span>
+
+                    <h2 className="events-published-number">
+                      {eventMonitoring.published_events}
+                    </h2>
+
+                    <p>Publication recorded</p>
+
+                  </div>
+
+                  <div className="events-stat-card">
+
+                    <span>Processed Events</span>
+
+                    <h2 className="events-processed-number">
+                      {eventMonitoring.processed_events}
+                    </h2>
+
+                    <p>Recorded by the consumer</p>
+
+                  </div>
+
+                </div>
+
+                {/* EVENT PIPELINE */}
+
+                <div className="panel events-pipeline-panel">
+
+                  <div className="panel-header">
+                    <div>
+                      <h3>Event Processing Pipeline</h3>
+                      <p>FinGuard event-driven architecture</p>
+                    </div>
+                  </div>
+
+                  <div className="events-pipeline">
+
+                    <div className="pipeline-node">
+                      <strong>PostgreSQL</strong>
+                      <span>Transactional Outbox</span>
+                    </div>
+
+                    <span className="pipeline-arrow">→</span>
+
+                    <div className="pipeline-node">
+                      <strong>Redpanda</strong>
+                      <span>Event Streaming</span>
+                    </div>
+
+                    <span className="pipeline-arrow">→</span>
+
+                    <div className="pipeline-node">
+                      <strong>Consumer</strong>
+                      <span>Idempotent Processing</span>
+                    </div>
+
+                  </div>
+
+                  <p className="events-pipeline-note">
+                    Architecture overview. The counters above come
+                    from PostgreSQL, not from live broker health checks.
+                  </p>
+
+                </div>
+
+                {/* EVENT HISTORY */}
+
+                <div className="panel events-history-panel">
+
+                  <div className="panel-header">
+
+                    <div>
+                      <h3>Recent Events</h3>
+                      <p>Latest outbox events from PostgreSQL</p>
+                    </div>
+
+                    <span className="panel-tag">
+                      {eventMonitoringError
+                        ? 'STALE DATA'
+                        : 'LIVE DATA'}
+                    </span>
+
+                  </div>
+
+                  <div className="table-wrapper">
+
+                    <table>
+
+                      <thead>
+                        <tr>
+                          <th>EVENT ID</th>
+                          <th>EVENT TYPE</th>
+                          <th>CREATED</th>
+                          <th>STATUS</th>
+                          <th>ATTEMPTS</th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+
+                        {eventMonitoring.recent_events.length === 0 ? (
+
+                          <tr>
+                            <td colSpan={5}>
+                              No events found.
+                            </td>
+                          </tr>
+
+                        ) : (
+
+                          eventMonitoring.recent_events.map((event) => (
+
+                            <tr key={event.event_id}>
+
+                              <td>
+                                <span
+                                  className="transaction-id"
+                                  title={event.event_id}
+                                >
+                                  {event.event_id.slice(0, 8)}...
+                                </span>
+                              </td>
+
+                              <td>
+                                <strong>{event.event_type}</strong>
+                              </td>
+
+                              <td>
+                                {new Date(
+                                  event.created_at
+                                ).toLocaleString('en-GB', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </td>
+
+                              <td>
+                                <span
+                                  className={`events-status ${
+                                    event.published_at
+                                      ? 'events-status-published'
+                                      : 'events-status-pending'
+                                  }`}
+                                >
+                                  {event.published_at
+                                    ? 'PUBLISHED'
+                                    : 'PENDING'}
+                                </span>
+                              </td>
+
+                              <td>
+                                {event.publish_attempts}
+                              </td>
+
+                            </tr>
+
+                          ))
+
+                        )}
+
+                      </tbody>
+
+                    </table>
+
+                  </div>
+
+                  <p className="events-table-note">
+                    Row statuses represent outbox publication.
+                    Consumer processing is reported separately
+                    in the Processed Events counter.
+                  </p>
+
+                </div>
+
+                {/* AUTOMATIC REFRESH */}
+
+                <p className="events-refresh-note">
+                  ● Automatically refreshes every 10 seconds
+                  while this page is open.
+                </p>
+
+              </>
+
+            )}
 
           </section>
 

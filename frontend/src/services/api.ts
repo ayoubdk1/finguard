@@ -201,3 +201,28 @@ export async function assessRisk(
 
   return response.json() as Promise<RiskAssessmentResponse>
 }
+
+// ============================================
+// EVENT MONITORING
+// ============================================
+
+export interface MonitoringEvent {
+  event_id: string
+  event_type: string
+  aggregate_id: string
+  created_at: string
+  published_at: string | null
+  publish_attempts: number
+}
+
+export interface EventMonitoringResponse {
+  total_events: number
+  pending_events: number
+  published_events: number
+  processed_events: number
+  recent_events: MonitoringEvent[]
+}
+
+export async function getEventMonitoring(): Promise<EventMonitoringResponse> {
+  return apiGet<EventMonitoringResponse>('/monitoring/events')
+}

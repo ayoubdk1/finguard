@@ -2,7 +2,7 @@
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Header
-from sqlalchemy import text, select
+from sqlalchemy import text, select, func
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
@@ -11,6 +11,8 @@ from app.db.models import (
     AccountType,
     LedgerEntry,
     Transaction,
+    OutboxEvent,
+    ProcessedEvent,
 )
 from app.db.session import engine, SessionLocal
 
@@ -498,3 +500,69 @@ def assess_risk_endpoint(data: RiskAssessmentRequest):
     )
 
     return result
+
+
+# ============================================================
+# 9. EVENT MONITORING
+# ============================================================
+
+@app.get("/monitoring/events")
+def get_event_monitoring():
+    with SessionLocal() as db:
+
+        # 1. Count all outbox events
+        total_events = db.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+        ) or 0
+
+        # 2. Count pending events
+        pending_events = db.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.published_at.is_(None))
+        ) or 0
+
+        # 3. Count published events
+        published_events = db.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.published_at.is_not(None))
+        ) or 0
+
+        # 4. Count events processed by consumers
+        processed_events = db.scalar(
+            select(func.count())
+            .select_from(ProcessedEvent)
+        ) or 0
+
+        # 5. Most recent outbox events
+        recent_rows = db.scalars(
+            select(OutboxEvent)
+            .order_by(OutboxEvent.created_at.desc())
+            .limit(10)
+        ).all()
+
+        recent_events = [
+            {
+                "event_id": str(event.id),
+                "event_type": event.event_type,
+                "aggregate_id": str(event.aggregate_id),
+                "created_at": event.created_at.isoformat(),
+                "published_at": (
+                    event.published_at.isoformat()
+                    if event.published_at
+                    else None
+                ),
+                "publish_attempts": event.publish_attempts,
+            }
+            for event in recent_rows
+        ]
+
+    return {
+        "total_events": total_events,
+        "pending_events": pending_events,
+        "published_events": published_events,
+        "processed_events": processed_events,
+        "recent_events": recent_events,
+    }
