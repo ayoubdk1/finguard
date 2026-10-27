@@ -79,6 +79,31 @@ async function loadAccountMovements(): Promise<AccountMovement[]> {
   )
 }
 
+// ============================================
+// FORMAT EVENT TIMESTAMPS
+// ============================================
+
+function formatMonitoringDate(timestamp: string | null): string {
+  if (!timestamp) {
+    return '—'
+  }
+
+  const date = new Date(timestamp)
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Invalid date'
+  }
+
+  return date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
 function App() {
   const [activePage, setActivePage] = useState<
     | 'Dashboard'
@@ -1841,24 +1866,35 @@ function App() {
 
                   <div className="table-wrapper">
 
-                    <table>
+                    <table className="events-table">
+
+                      {/* ============================================ */}
+                      {/* TABLE HEADER */}
+                      {/* ============================================ */}
 
                       <thead>
                         <tr>
                           <th>EVENT ID</th>
+                          <th>TRANSACTION ID</th>
                           <th>EVENT TYPE</th>
-                          <th>CREATED</th>
+                          <th>CREATED AT</th>
+                          <th>PUBLISHED AT</th>
+                          <th>PROCESSED AT</th>
                           <th>STATUS</th>
                           <th>ATTEMPTS</th>
                         </tr>
                       </thead>
+
+                      {/* ============================================ */}
+                      {/* TABLE BODY */}
+                      {/* ============================================ */}
 
                       <tbody>
 
                         {eventMonitoring.recent_events.length === 0 ? (
 
                           <tr>
-                            <td colSpan={5}>
+                            <td colSpan={8}>
                               No events found.
                             </td>
                           </tr>
@@ -1869,6 +1905,8 @@ function App() {
 
                             <tr key={event.event_id}>
 
+                              {/* EVENT ID */}
+
                               <td>
                                 <span
                                   className="transaction-id"
@@ -1878,35 +1916,54 @@ function App() {
                                 </span>
                               </td>
 
-                              <td>
-                                <strong>{event.event_type}</strong>
-                              </td>
-
-                              <td>
-                                {new Date(
-                                  event.created_at
-                                ).toLocaleString('en-GB', {
-                                  day: '2-digit',
-                                  month: 'short',
-                                  year: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}
-                              </td>
+                              {/* RELATED TRANSACTION */}
 
                               <td>
                                 <span
-                                  className={`events-status ${
-                                    event.published_at
-                                      ? 'events-status-published'
-                                      : 'events-status-pending'
-                                  }`}
+                                  className="transaction-id"
+                                  title={event.aggregate_id}
                                 >
-                                  {event.published_at
-                                    ? 'PUBLISHED'
-                                    : 'PENDING'}
+                                  {event.aggregate_id.slice(0, 8)}...
                                 </span>
                               </td>
+
+                              {/* EVENT TYPE */}
+
+                              <td>
+                                <strong>
+                                  {event.event_type}
+                                </strong>
+                              </td>
+
+                              {/* CREATION TIMESTAMP */}
+
+                              <td>
+                                {formatMonitoringDate(event.created_at)}
+                              </td>
+
+                              {/* PUBLICATION TIMESTAMP */}
+
+                              <td>
+                                {formatMonitoringDate(event.published_at)}
+                              </td>
+
+                              {/* PROCESSING TIMESTAMP */}
+
+                              <td>
+                                {formatMonitoringDate(event.processed_at)}
+                              </td>
+
+                              {/* EVENT STATUS */}
+
+                              <td>
+                                <span
+                                  className={`events-status events-status-${event.status.toLowerCase()}`}
+                                >
+                                  {event.status}
+                                </span>
+                              </td>
+
+                              {/* PUBLICATION ATTEMPTS */}
 
                               <td>
                                 {event.publish_attempts}

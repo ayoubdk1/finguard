@@ -1372,3 +1372,54 @@ td {
     display: none;
   }
 }
+
+/* ============================================
+   ADVANCED EVENT MONITORING
+============================================ */
+
+/* PENDING EVENTS */
+
+.events-status-pending {
+  background: #fff3d8;
+  color: #b7791f;
+}
+
+/* PUBLISHED EVENTS */
+
+.events-status-published {
+  background: #e8f0ff;
+  color: #4478d9;
+}
+
+/* PROCESSED EVENTS */
+
+.events-status-processed {
+  background: #e4f9f1;
+  color: #0da783;
+}
+
+/* EVENT TABLE */
+
+.events-history-panel .table-wrapper {
+  overflow-x: auto;
+}
+
+.events-table {
+  min-width: 1100px;
+}
+
+.events-table td {
+  vertical-align: middle;
+}
+
+.events-table th {
+  white-space: nowrap;
+}
+
+.events-table .transaction-id {
+  font-size: 11px;
+}
+
+.events-table .events-status {
+  white-space: nowrap;
+}

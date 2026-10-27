@@ -203,16 +203,21 @@ export async function assessRisk(
 }
 
 // ============================================
-// EVENT MONITORING
+// MONITORING EVENT
 // ============================================
 
 export interface MonitoringEvent {
   event_id: string
   event_type: string
   aggregate_id: string
+
   created_at: string
   published_at: string | null
+  processed_at: string | null
+
   publish_attempts: number
+
+  status: 'PENDING' | 'PUBLISHED' | 'PROCESSED'
 }
 
 export interface EventMonitoringResponse {

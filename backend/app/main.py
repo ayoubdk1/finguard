@@ -503,48 +503,61 @@ def assess_risk_endpoint(data: RiskAssessmentRequest):
 
 
 # ============================================================
-# 9. EVENT MONITORING
+# 9. ADVANCED EVENT MONITORING
 # ============================================================
 
 @app.get("/monitoring/events")
 def get_event_monitoring():
     with SessionLocal() as db:
 
-        # 1. Count all outbox events
+        # =============================================
+        # 1. EVENT STATISTICS
+        # =============================================
         total_events = db.scalar(
             select(func.count())
             .select_from(OutboxEvent)
         ) or 0
 
-        # 2. Count pending events
         pending_events = db.scalar(
             select(func.count())
             .select_from(OutboxEvent)
             .where(OutboxEvent.published_at.is_(None))
         ) or 0
 
-        # 3. Count published events
         published_events = db.scalar(
             select(func.count())
             .select_from(OutboxEvent)
             .where(OutboxEvent.published_at.is_not(None))
         ) or 0
 
-        # 4. Count events processed by consumers
         processed_events = db.scalar(
             select(func.count())
             .select_from(ProcessedEvent)
         ) or 0
 
-        # 5. Most recent outbox events
-        recent_rows = db.scalars(
-            select(OutboxEvent)
+        # =============================================
+        # 2. RECENT EVENTS WITH CONSUMER STATUS (LEFT JOIN)
+        # =============================================
+        recent_rows = db.execute(
+            select(OutboxEvent, ProcessedEvent.processed_at)
+            .outerjoin(
+                ProcessedEvent,
+                OutboxEvent.id == ProcessedEvent.event_id,
+            )
             .order_by(OutboxEvent.created_at.desc())
             .limit(10)
         ).all()
 
-        recent_events = [
-            {
+        recent_events = []
+        for event, processed_at in recent_rows:
+            if processed_at is not None:
+                status = "PROCESSED"
+            elif event.published_at is not None:
+                status = "PUBLISHED"
+            else:
+                status = "PENDING"
+
+            recent_events.append({
                 "event_id": str(event.id),
                 "event_type": event.event_type,
                 "aggregate_id": str(event.aggregate_id),
@@ -554,10 +567,14 @@ def get_event_monitoring():
                     if event.published_at
                     else None
                 ),
+                "processed_at": (
+                    processed_at.isoformat()
+                    if processed_at
+                    else None
+                ),
                 "publish_attempts": event.publish_attempts,
-            }
-            for event in recent_rows
-        ]
+                "status": status,
+            })
 
     return {
         "total_events": total_events,
@@ -566,3 +583,4 @@ def get_event_monitoring():
         "processed_events": processed_events,
         "recent_events": recent_events,
     }
+
