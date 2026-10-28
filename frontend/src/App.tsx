@@ -461,13 +461,25 @@ function App() {
     setTransferFormError('')
 
     if (transferFrom === transferTo) {
-      setTransferFormError('Source and destination accounts must be different')
+      setTransferFormError('Source and destination must be different accounts')
       return
     }
 
     const amount = Number(transferAmount)
-    if (!Number.isSafeInteger(amount) || amount <= 0) {
-      setTransferFormError('Please enter a valid positive amount in cents')
+    if (
+      !/^[1-9]\d*$/.test(transferAmount) ||
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    ) {
+      setTransferFormError('Please enter a positive whole number in cents')
+      return
+    }
+
+    const sourceAccount = balances?.find(
+      (acc) => acc.account_id === transferFrom
+    )
+    if (sourceAccount && amount > sourceAccount.balance_cents) {
+      setTransferFormError('Insufficient funds in source account')
       return
     }
 
