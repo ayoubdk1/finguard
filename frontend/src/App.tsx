@@ -8,6 +8,7 @@ import {
   getEventMonitoring,
   type AccountBalance,
   type TransactionHistoryItem,
+  type TransferRequest,
   type TransferResponse,
   type RiskAssessmentResponse,
   type EventMonitoringResponse,
@@ -104,6 +105,50 @@ function formatMonitoringDate(timestamp: string | null): string {
   })
 }
 
+// ============================================
+// SAFE TRANSFER RETRIES
+// ============================================
+
+interface PendingTransfer {
+  key: string
+  payload: TransferRequest
+}
+
+const PENDING_TRANSFER_STORAGE = 'finguard.pendingTransfer'
+
+// Recover a transfer whose result is still uncertain
+function readPendingTransfer(): PendingTransfer | null {
+  try {
+    const saved = window.sessionStorage.getItem(
+      PENDING_TRANSFER_STORAGE
+    )
+
+    if (!saved) {
+      return null
+    }
+
+    const data = JSON.parse(saved) as PendingTransfer
+
+    if (
+      typeof data.key !== 'string' ||
+      !data.key ||
+      !data.payload ||
+      typeof data.payload.source_account_id !== 'string' ||
+      typeof data.payload.destination_account_id !== 'string' ||
+      typeof data.payload.description !== 'string' ||
+      !Number.isSafeInteger(data.payload.amount_cents) ||
+      data.payload.amount_cents <= 0
+    ) {
+      return null
+    }
+
+    return data
+
+  } catch {
+    return null
+  }
+}
+
 function App() {
   const [activePage, setActivePage] = useState<
     | 'Dashboard'
@@ -184,8 +229,12 @@ function App() {
   const [transferResult, setTransferResult] =
     useState<TransferResponse | null>(null)
 
+  // Saved request used for safe retries
+  const [pendingTransfer, setPendingTransfer] =
+    useState<PendingTransfer | null>(() => readPendingTransfer())
+
   const [transferRequestKey, setTransferRequestKey] =
-    useState(() => crypto.randomUUID())
+    useState<string>(() => crypto.randomUUID())
 
   // ============================================
   // TRANSACTIONS PAGE STATE
@@ -363,20 +412,38 @@ function App() {
   }
 
   function openTransferModal() {
-    setTransferFrom(ALICE_ACCOUNT_ID)
-    setTransferTo(BOB_ACCOUNT_ID)
 
-    setTransferAmount('')
-    setTransferDescription('')
+    // Check whether an earlier request is unresolved
+    const saved = pendingTransfer ?? readPendingTransfer()
+
+    setTransferFrom(
+      saved?.payload.source_account_id ?? ALICE_ACCOUNT_ID
+    )
+
+    setTransferTo(
+      saved?.payload.destination_account_id ?? BOB_ACCOUNT_ID
+    )
+
+    setTransferAmount(
+      saved ? String(saved.payload.amount_cents) : ''
+    )
+
+    setTransferDescription(
+      saved?.payload.description ?? ''
+    )
+
+    setTransferRequestKey(
+      saved?.key ?? crypto.randomUUID()
+    )
+
+    setPendingTransfer(saved)
 
     setTransferFormError('')
-    setIsTransferReview(false)
-
     setTransferSubmitting(false)
     setTransferResult(null)
 
-    // Unique key for each NEW transfer
-    setTransferRequestKey(crypto.randomUUID())
+    // A saved attempt goes directly to the review screen
+    setIsTransferReview(Boolean(saved))
 
     setShowTransferModal(true)
   }
@@ -436,19 +503,59 @@ function App() {
     setTransferFormError('')
 
     try {
-      // 1. Execute the simulated transfer
+      // ============================================
+      // 1. REUSE OR CREATE THE TRANSFER ATTEMPT
+      // ============================================
+
+      let attempt = pendingTransfer
+
+      if (!attempt) {
+
+        attempt = {
+          key: transferRequestKey,
+
+          payload: {
+            source_account_id: transferFrom,
+            destination_account_id: transferTo,
+            amount_cents: amount,
+            description: transferDescription,
+          },
+        }
+
+        // Save BEFORE sending to FastAPI
+        window.sessionStorage.setItem(
+          PENDING_TRANSFER_STORAGE,
+          JSON.stringify(attempt)
+        )
+
+        setPendingTransfer(attempt)
+      }
+
+      // ============================================
+      // 2. SUBMIT EXACTLY THE SAME REQUEST
+      // ============================================
+
       const result = await createTransfer(
-        {
-          source_account_id: transferFrom,
-          destination_account_id: transferTo,
-          amount_cents: amount,
-          description: transferDescription,
-        },
-        transferRequestKey
+        attempt.payload,
+        attempt.key
       )
 
       // 2. Save the successful response
       setTransferResult(result)
+
+      // ============================================
+      // 3. CLEAR SAVED REQUEST AFTER CONFIRMED SUCCESS
+      // ============================================
+
+      setPendingTransfer(null)
+
+      try {
+        window.sessionStorage.removeItem(
+          PENDING_TRANSFER_STORAGE
+        )
+      } catch (error) {
+        console.warn('Could not clear saved transfer:', error)
+      }
 
       // Refresh the Transactions page after a successful transfer
       setMovementsRefreshKey((current) => current + 1)
@@ -2277,8 +2384,24 @@ function App() {
                 </div>
 
                 <div className="transfer-info">
-                  This is a simulated transfer.
-                  No transaction has been submitted yet.
+
+                  {pendingTransfer
+                    ? (
+                      <>
+                        This transfer may already have been processed.
+                        Retry using the same request and idempotency key.
+                        Do not create a new transfer until its outcome
+                        is confirmed.
+                      </>
+                    )
+                    : (
+                      <>
+                        This is a simulated transfer.
+                        No transaction has been submitted yet.
+                      </>
+                    )
+                  }
+
                 </div>
 
                 {transferFormError && (
@@ -2292,8 +2415,8 @@ function App() {
                   <button
                     type="button"
                     className="secondary-button"
+                    disabled={transferSubmitting || pendingTransfer !== null}
                     onClick={() => setIsTransferReview(false)}
-                    disabled={transferSubmitting}
                   >
                     ← Edit
                   </button>
@@ -2306,7 +2429,9 @@ function App() {
                   >
                     {transferSubmitting
                       ? 'Processing Transfer...'
-                      : 'Confirm Transfer'}
+                      : pendingTransfer
+                        ? 'Retry Same Transfer'
+                        : 'Confirm Transfer'}
                   </button>
 
                 </div>
