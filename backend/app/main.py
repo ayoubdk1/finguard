@@ -16,6 +16,11 @@ from app.db.models import (
 )
 from app.db.session import engine, SessionLocal
 
+from fastapi import status
+from sqlalchemy import select
+from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
+from app.security.passwords import hash_password, verify_password
+from app.security.tokens import create_access_token
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.account import AccountCreate, AccountResponse
 from app.schemas.deposit import DepositCreate
@@ -584,3 +589,54 @@ def get_event_monitoring():
         "recent_events": recent_events,
     }
 
+@app.post(
+    "/auth/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_user(payload: RegisterRequest):
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(User).where(User.email == payload.email)
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
+
+        user = User(
+            email=payload.email,
+            full_name=payload.full_name,
+            password_hash=hash_password(payload.password),
+            role="CUSTOMER",
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+@app.post(
+    "/auth/login",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+def login_user(payload: LoginRequest):
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(User).where(User.email == payload.email)
+        )
+        if (
+            user is None
+            or not user.password_hash
+            or not verify_password(payload.password, user.password_hash)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token = create_access_token(user.id)
+        return TokenResponse(access_token=token)
