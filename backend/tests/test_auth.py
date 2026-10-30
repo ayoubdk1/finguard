@@ -83,3 +83,43 @@ def test_login_wrong_password_returns_401():
     )
     assert res.status_code == 401, res.text
 
+
+
+def test_auth_me_requires_valid_token():
+    # 1. Missing token -> 401
+    unauth = client.get("/auth/me")
+    assert unauth.status_code == 401, unauth.text
+
+    # 2. Invalid token -> 401
+    bad = client.get(
+        "/auth/me",
+        headers={"Authorization": "Bearer invalid.token.value"},
+    )
+    assert bad.status_code == 401, bad.text
+
+    # 3. Valid token -> 200 with user profile
+    email = f"me-{uuid4().hex[:8]}@example.com"
+    password = "StrongPassword123!"
+    reg = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "Diana Prince",
+            "password": password,
+        },
+    )
+    assert reg.status_code == 201
+
+    login = client.post(
+        "/auth/login",
+        json={"email": email, "password": password},
+    )
+    token = login.json()["access_token"]
+
+    me = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert me.status_code == 200, me.text
+    assert me.json()["email"] == email
+    assert me.json()["full_name"] == "Diana Prince"

@@ -16,8 +16,9 @@ from app.db.models import (
 )
 from app.db.session import engine, SessionLocal
 
-from fastapi import status
+from fastapi import Depends, status
 from sqlalchemy import select
+from app.security.dependencies import get_current_user
 from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
 from app.security.passwords import hash_password, verify_password
 from app.security.tokens import create_access_token
@@ -640,3 +641,12 @@ def login_user(payload: LoginRequest):
 
         token = create_access_token(user.id)
         return TokenResponse(access_token=token)
+
+
+@app.get(
+    "/auth/me",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_200_OK,
+)
+def read_current_user(current_user: User = Depends(get_current_user)):
+    return current_user
