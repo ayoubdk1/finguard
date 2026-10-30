@@ -16,7 +16,8 @@ from app.db.models import (
 )
 from app.db.session import engine, SessionLocal
 
-from fastapi import Depends, status
+from fastapi import Depends, Request, status
+from app.security.rate_limit import check_login_rate_limit
 from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
@@ -47,6 +48,15 @@ from app.services.risk_assessment import assess_transaction_risk
 
 
 app = FastAPI(title="FinGuard API")
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 # ============================================================
@@ -653,7 +663,10 @@ def register_user(payload: RegisterRequest):
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
 )
-def login_user(payload: LoginRequest):
+def login_user(
+    payload: LoginRequest,
+    _rate_limit: None = Depends(check_login_rate_limit),
+):
     with SessionLocal() as session:
         user = session.scalar(
             select(User).where(User.email == payload.email)

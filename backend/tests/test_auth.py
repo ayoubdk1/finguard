@@ -228,3 +228,30 @@ def test_protected_routes_require_token_and_enforce_ownership():
         assert ok_bal.status_code == 200
     finally:
         app.dependency_overrides.update(saved_overrides)
+
+
+from app.security.rate_limit import reset_login_rate_limits  # noqa: E402
+
+
+def test_security_headers_and_login_rate_limit():
+    reset_login_rate_limits()
+    try:
+        health = client.get("/health")
+        assert health.headers.get("X-Content-Type-Options") == "nosniff"
+        assert health.headers.get("X-Frame-Options") == "DENY"
+        assert health.headers.get("Referrer-Policy") == "no-referrer"
+
+        for _ in range(5):
+            res = client.post(
+                "/auth/login",
+                json={"email": "nobody@example.com", "password": "wrongpassword"},
+            )
+            assert res.status_code == 401
+
+        blocked = client.post(
+            "/auth/login",
+            json={"email": "nobody@example.com", "password": "wrongpassword"},
+        )
+        assert blocked.status_code == 429
+    finally:
+        reset_login_rate_limits()

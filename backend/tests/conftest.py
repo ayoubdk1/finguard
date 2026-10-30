@@ -128,3 +128,14 @@ def _default_test_admin() -> User:
 
 
 app.dependency_overrides[get_current_user] = _default_test_admin
+
+
+from app.security.rate_limit import reset_login_rate_limits  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Each test starts with a clean login rate-limit counter."""
+    reset_login_rate_limits()
+    yield
+    reset_login_rate_limits()
