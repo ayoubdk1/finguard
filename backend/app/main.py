@@ -16,7 +16,7 @@ from app.db.models import (
 )
 from app.db.session import engine, SessionLocal
 
-from fastapi import Depends, Request, status
+from fastapi import Depends, Request, Response, status
 from app.security.rate_limit import check_login_rate_limit
 from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
@@ -50,12 +50,23 @@ from app.services.risk_assessment import assess_transaction_risk
 app = FastAPI(title="FinGuard API")
 
 
+_METRICS_COUNTS: dict[tuple[str, str, int], int] = {}
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+
+    # Use the route template (e.g. /accounts/{account_id}/balance), not the
+    # raw URL, so every account UUID doesn't create a new metric series.
+    route = request.scope.get("route")
+    path = getattr(route, "path", "unmatched")
+
+    key = (request.method, path, response.status_code)
+    _METRICS_COUNTS[key] = _METRICS_COUNTS.get(key, 0) + 1
     return response
 
 
@@ -693,3 +704,21 @@ def login_user(
 )
 def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+
+@app.get("/metrics")
+def prometheus_metrics():
+    lines = [
+        "# HELP finguard_http_requests_total Total HTTP requests handled",
+        "# TYPE finguard_http_requests_total counter",
+    ]
+    for (method, path, code), count in sorted(_METRICS_COUNTS.items()):
+        lines.append(
+            f'finguard_http_requests_total{{method="{method}",path="{path}",status="{code}"}} {count}'
+        )
+    body = "\n".join(lines) + "\n"
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

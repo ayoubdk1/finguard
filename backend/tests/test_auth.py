@@ -255,3 +255,11 @@ def test_security_headers_and_login_rate_limit():
         assert blocked.status_code == 429
     finally:
         reset_login_rate_limits()
+
+
+def test_prometheus_metrics_endpoint():
+    client.get("/health")
+    res = client.get("/metrics")
+    assert res.status_code == 200
+    assert "finguard_http_requests_total" in res.text
+    assert 'path="/health"' in res.text
