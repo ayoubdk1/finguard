@@ -1,4 +1,4 @@
-﻿
+
 import os
 import uuid
 from fastapi.testclient import TestClient
@@ -111,3 +111,20 @@ def client(session, monkeypatch):
 
     with TestClient(api_module.app) as test_client:
         yield test_client
+
+
+from uuid import uuid4  # noqa: E402
+from app.main import app  # noqa: E402
+from app.security.dependencies import get_current_user  # noqa: E402
+
+
+def _default_test_admin() -> User:
+    return User(
+        id=uuid4(),
+        email="test-admin@finguard.local",
+        full_name="Test Admin",
+        role="ADMIN",
+    )
+
+
+app.dependency_overrides[get_current_user] = _default_test_admin

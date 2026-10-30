@@ -18,7 +18,7 @@ from app.db.session import engine, SessionLocal
 
 from fastapi import Depends, status
 from sqlalchemy import select
-from app.security.dependencies import get_current_user
+from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
 from app.security.passwords import hash_password, verify_password
 from app.security.tokens import create_access_token
@@ -95,7 +95,16 @@ def create_user(data: UserCreate):
 # ============================================================
 
 @app.post("/accounts", response_model=AccountResponse, status_code=201)
-def create_account(data: AccountCreate):
+def create_account(
+    data: AccountCreate,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "ADMIN" and data.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot create account for another user",
+        )
+
     with SessionLocal() as db:
 
         user = db.get(User, data.user_id)
@@ -132,7 +141,10 @@ def create_deposit(
         max_length=100,
         alias="Idempotency-Key",
     ),
+    current_user: User = Depends(get_current_user),
 ):
+    ensure_user_owns_account_id(data.account_id, current_user)
+
     with SessionLocal() as db:
 
         # 1. Find customer account
@@ -256,7 +268,10 @@ def create_transfer(
         max_length=100,
         alias="Idempotency-Key",
     ),
+    current_user: User = Depends(get_current_user),
 ):
+    ensure_user_owns_account_id(data.source_account_id, current_user)
+
     with SessionLocal() as db:
 
         # 1. Prevent transfer to the same account
@@ -410,7 +425,12 @@ def create_transfer(
     "/accounts/{account_id}/balance",
     response_model=BalanceResponse,
 )
-def account_balance(account_id: UUID):
+def account_balance(
+    account_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    ensure_user_owns_account_id(account_id, current_user)
+
     with SessionLocal() as db:
 
         # 1. Find account
@@ -441,7 +461,12 @@ def account_balance(account_id: UUID):
     "/accounts/{account_id}/transactions",
     response_model=TransactionHistoryResponse,
 )
-def account_transactions(account_id: UUID):
+def account_transactions(
+    account_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    ensure_user_owns_account_id(account_id, current_user)
+
     with SessionLocal() as db:
 
         # 1. Check account exists
@@ -497,7 +522,10 @@ def account_transactions(account_id: UUID):
 # ============================================================
 
 @app.post("/risk/assess")
-def assess_risk_endpoint(data: RiskAssessmentRequest):
+def assess_risk_endpoint(
+    data: RiskAssessmentRequest,
+    current_user: User = Depends(get_current_user),
+):
     result = assess_transaction_risk(
         amount_cents=data.amount_cents,
         transfers_last_10min=data.transfers_last_10min,
@@ -513,7 +541,9 @@ def assess_risk_endpoint(data: RiskAssessmentRequest):
 # ============================================================
 
 @app.get("/monitoring/events")
-def get_event_monitoring():
+def get_event_monitoring(
+    current_user: User = Depends(get_current_user),
+):
     with SessionLocal() as db:
 
         # =============================================
