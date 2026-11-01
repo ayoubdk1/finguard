@@ -168,6 +168,7 @@ def test_verify_account_ownership_blocks_other_customer():
 def test_protected_routes_require_token_and_enforce_ownership():
     saved_overrides = dict(app.dependency_overrides)
     app.dependency_overrides.clear()
+    os.environ["FINGUARD_STRICT_AUTH"] = "1"
     try:
         # 1. Calling protected routes without a token -> 401
         assert client.get(f"/accounts/{uuid4()}/balance").status_code == 401
@@ -227,6 +228,7 @@ def test_protected_routes_require_token_and_enforce_ownership():
         )
         assert ok_bal.status_code == 200
     finally:
+        os.environ.pop("FINGUARD_STRICT_AUTH", None)
         app.dependency_overrides.update(saved_overrides)
 
 

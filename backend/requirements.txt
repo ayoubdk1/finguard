@@ -14,3 +14,4 @@ confluent-kafka>=2.5,<3
 pwdlib[argon2]>=0.3,<1
 PyJWT>=2.10,<3
 email-validator>=2.2,<3
+
