@@ -824,6 +824,7 @@ function App() {
               const available =
                 item.label === 'Dashboard' ||
                 item.label === 'Accounts' ||
+                item.label === 'Transfers' ||
                 item.label === 'Transactions' ||
                 item.label === 'Fraud Detection' ||
                 item.label === 'Event Monitoring'
@@ -837,6 +838,11 @@ function App() {
                   }`}
                   disabled={!available}
                   onClick={() => {
+                    if (item.label === 'Transfers') {
+                      openTransferModal()
+                      return
+                    }
+
                     if (
                       item.label === 'Dashboard' ||
                       item.label === 'Accounts' ||
