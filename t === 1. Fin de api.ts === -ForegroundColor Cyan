@@ -1,0 +1,218 @@
+[1mdiff --git a/frontend/src/services/api.ts b/frontend/src/services/api.ts[m
+[1mindex 6f0697c..de7f08c 100644[m
+[1m--- a/frontend/src/services/api.ts[m
+[1m+++ b/frontend/src/services/api.ts[m
+[36m@@ -4,139 +4,149 @@[m [mconst API_BASE_URL = '/api'[m
+ [m
+ // Account balance returned by FastAPI[m
+ export interface AccountBalance {[m
+[31m-    account_id: string[m
+[31m-    currency: string[m
+[31m-    balance_cents: number[m
+[32m+[m[32m  account_id: string[m
+[32m+[m[32m  currency: string[m
+[32m+[m[32m  balance_cents: number[m
+[32m+[m[32m}[m
+[32m+[m[32mexport interface CustomerAccount {[m
+[32m+[m[32m  id: string[m
+[32m+[m[32m  user_id: string | null[m
+[32m+[m[32m  name: string[m
+[32m+[m[32m  account_type: string[m
+[32m+[m[32m  currency: string[m
+[32m+[m[32m  created_at: string[m
+ }[m
+[31m-[m
+ // Reusable HTTP GET function[m
+ async function apiGet<T>(endpoint: string): Promise<T> {[m
+[31m-    const response = await fetch(`${API_BASE_URL}${endpoint}`)[m
+[32m+[m[32m  const response = await fetch(`${API_BASE_URL}${endpoint}`)[m
+ [m
+[31m-    if (!response.ok) {[m
+[31m-        throw new Error([m
+[31m-            `API request failed: ${response.status}`[m
+[31m-        )[m
+[31m-    }[m
+[32m+[m[32m  if (!response.ok) {[m
+[32m+[m[32m    throw new Error([m
+[32m+[m[32m      `API request failed: ${response.status}`[m
+[32m+[m[32m    )[m
+[32m+[m[32m  }[m
+ [m
+[31m-    return response.json() as Promise<T>[m
+[32m+[m[32m  return response.json() as Promise<T>[m
+ }[m
+ [m
+ // Check backend connection[m
+ export async function checkBackendHealth() {[m
+[31m-    return apiGet<{ status: string }>('/health')[m
+[32m+[m[32m  return apiGet<{ status: string }>('/health')[m
+[32m+[m[32m}[m
+[32m+[m[32m// Retrieve customer accounts available to the authenticated user[m
+[32m+[m[32mexport async function getAccounts(): Promise<CustomerAccount[]> {[m
+[32m+[m[32m  return apiGet<CustomerAccount[]>('/accounts')[m
+ }[m
+[31m-[m
+ // Get the balance of a customer account[m
+ export async function getAccountBalance([m
+[31m-    accountId: string[m
+[32m+[m[32m  accountId: string[m
+ ): Promise<AccountBalance> {[m
+[31m-    return apiGet<AccountBalance>([m
+[31m-        `/accounts/${encodeURIComponent(accountId)}/balance`[m
+[31m-    )[m
+[32m+[m[32m  return apiGet<AccountBalance>([m
+[32m+[m[32m    `/accounts/${encodeURIComponent(accountId)}/balance`[m
+[32m+[m[32m  )[m
+ }[m
+ // Transaction returned by FastAPI[m
+ export interface TransactionHistoryItem {[m
+[31m-    transaction_id: string[m
+[31m-    created_at: string[m
+[31m-    description: string[m
+[31m-    status: string[m
+[31m-    amount_cents: number[m
+[31m-    currency: string[m
+[32m+[m[32m  transaction_id: string[m
+[32m+[m[32m  created_at: string[m
+[32m+[m[32m  description: string[m
+[32m+[m[32m  status: string[m
+[32m+[m[32m  amount_cents: number[m
+[32m+[m[32m  currency: string[m
+ }[m
+ [m
+ // Account transaction history response[m
+ export interface TransactionHistoryResponse {[m
+[31m-    account_id: string[m
+[31m-    transactions: TransactionHistoryItem[][m
+[32m+[m[32m  account_id: string[m
+[32m+[m[32m  transactions: TransactionHistoryItem[][m
+ }[m
+ [m
+ // Retrieve transactions for one account[m
+ export async function getAccountTransactions([m
+[31m-    accountId: string[m
+[32m+[m[32m  accountId: string[m
+ ): Promise<TransactionHistoryResponse> {[m
+[31m-    return apiGet<TransactionHistoryResponse>([m
+[31m-        `/accounts/${encodeURIComponent(accountId)}/transactions`[m
+[31m-    )[m
+[32m+[m[32m  return apiGet<TransactionHistoryResponse>([m
+[32m+[m[32m    `/accounts/${encodeURIComponent(accountId)}/transactions`[m
+[32m+[m[32m  )[m
+ }[m
+ // ============================================[m
+ // SIMULATED TRANSFER[m
+ // ============================================[m
+ [m
+ export interface TransferRequest {[m
+[31m-    source_account_id: string[m
+[31m-    destination_account_id: string[m
+[31m-    amount_cents: number[m
+[31m-    description: string[m
+[32m+[m[32m  source_account_id: string[m
+[32m+[m[32m  destination_account_id: string[m
+[32m+[m[32m  amount_cents: number[m
+[32m+[m[32m  description: string[m
+ }[m
+ [m
+ export interface TransferResponse {[m
+[31m-    transaction_id: string[m
+[31m-    status: string[m
+[31m-    source_account_id: string[m
+[31m-    destination_account_id: string[m
+[31m-    amount_cents: number[m
+[31m-    currency: string[m
+[31m-    source_balance_cents: number[m
+[31m-    destination_balance_cents: number[m
+[32m+[m[32m  transaction_id: string[m
+[32m+[m[32m  status: string[m
+[32m+[m[32m  source_account_id: string[m
+[32m+[m[32m  destination_account_id: string[m
+[32m+[m[32m  amount_cents: number[m
+[32m+[m[32m  currency: string[m
+[32m+[m[32m  source_balance_cents: number[m
+[32m+[m[32m  destination_balance_cents: number[m
+ }[m
+ export async function createTransfer([m
+[31m-    transfer: TransferRequest,[m
+[31m-    idempotencyKey: string[m
+[32m+[m[32m  transfer: TransferRequest,[m
+[32m+[m[32m  idempotencyKey: string[m
+ ): Promise<TransferResponse> {[m
+ [m
+[31m-    // Validate transfer amount[m
+[31m-    if ([m
+[31m-        !Number.isSafeInteger(transfer.amount_cents) ||[m
+[31m-        transfer.amount_cents <= 0[m
+[31m-    ) {[m
+[31m-        throw new Error('Amount must be a positive integer in cents')[m
+[31m-    }[m
+[31m-[m
+[31m-    if ([m
+[31m-        transfer.source_account_id ===[m
+[31m-        transfer.destination_account_id[m
+[31m-    ) {[m
+[31m-        throw new Error('Source and destination must be different')[m
+[31m-    }[m
+[32m+[m[32m  // Validate transfer amount[m
+[32m+[m[32m  if ([m
+[32m+[m[32m    !Number.isSafeInteger(transfer.amount_cents) ||[m
+[32m+[m[32m    transfer.amount_cents <= 0[m
+[32m+[m[32m  ) {[m
+[32m+[m[32m    throw new Error('Amount must be a positive integer in cents')[m
+[32m+[m[32m  }[m
+ [m
+[31m-    if (!idempotencyKey.trim()) {[m
+[31m-        throw new Error('An idempotency key is required')[m
+[31m-    }[m
+[32m+[m[32m  if ([m
+[32m+[m[32m    transfer.source_account_id ===[m
+[32m+[m[32m    transfer.destination_account_id[m
+[32m+[m[32m  ) {[m
+[32m+[m[32m    throw new Error('Source and destination must be different')[m
+[32m+[m[32m  }[m
+ [m
+[31m-    // Send the transfer to FastAPI[m
+[31m-    const response = await fetch('/api/transfers', {[m
+[31m-        method: 'POST',[m
+[32m+[m[32m  if (!idempotencyKey.trim()) {[m
+[32m+[m[32m    throw new Error('An idempotency key is required')[m
+[32m+[m[32m  }[m
+ [m
+[31m-        headers: {[m
+[31m-            'Content-Type': 'application/json',[m
+[31m-            'Idempotency-Key': idempotencyKey,[m
+[31m-        },[m
+[32m+[m[32m  // Send the transfer to FastAPI[m
+[32m+[m[32m  const response = await fetch('/api/transfers', {[m
+[32m+[m[32m    method: 'POST',[m
+ [m
+[31m-        body: JSON.stringify(transfer),[m
+[31m-    })[m
+[32m+[m[32m    headers: {[m
+[32m+[m[32m      'Content-Type': 'application/json',[m
+[32m+[m[32m      'Idempotency-Key': idempotencyKey,[m
+[32m+[m[32m    },[m
+ [m
+[31m-    // Handle API errors[m
+[31m-    if (!response.ok) {[m
+[31m-        const errorData: unknown = await response[m
+[31m-            .json()[m
+[31m-            .catch(() => null)[m
+[32m+[m[32m    body: JSON.stringify(transfer),[m
+[32m+[m[32m  })[m
+ [m
+[31m-        let message = `Transfer failed (HTTP ${response.status})`[m
+[32m+[m[32m  // Handle API errors[m
+[32m+[m[32m  if (!response.ok) {[m
+[32m+[m[32m    const errorData: unknown = await response[m
+[32m+[m[32m      .json()[m
+[32m+[m[32m      .catch(() => null)[m
+ [m
+[31m-        if ([m
+[31m-            errorData !== null &&[m
+[31m-            typeof errorData === 'object' &&[m
+[31m-            'detail' in errorData &&[m
+[31m-            typeof errorData.detail === 'string'[m
+[31m-        ) {[m
+[31m-    

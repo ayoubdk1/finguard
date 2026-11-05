@@ -1,5 +1,6 @@
-from app.db.models import Account, AccountType
 import uuid
+import pytest
+from app.db.models import Account, AccountType
 from app.services.ledger import EntryInput, post_transaction
 
 
@@ -22,6 +23,7 @@ def test_create_user(client):
     assert data["full_name"] == "API Test User"
     assert "id" in data
     assert "created_at" in data
+
 
 def test_create_account(client):
     # Create a test user
@@ -69,6 +71,7 @@ def test_create_account_user_not_found(client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "User not found"
+
 
 def test_deposit_idempotency(client, session):
     # 1. Create a test user
@@ -156,7 +159,200 @@ def test_deposit_idempotency(client, session):
 
     assert balance.status_code == 200
     assert balance.json()["balance_cents"] == 5000
-    
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "currency, amount_minor",
+    [
+        ("TND", 12500),  # 12.500 TND
+        ("USD", 1250),   # 12.50 USD
+        ("EUR", 1250),   # 12.50 EUR
+    ],
+)
+def test_multi_currency_deposit(
+    client, session, currency, amount_minor
+):
+    # 1. Create a test user
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"multi-{uuid.uuid4().hex}@example.com",
+            "full_name": "Multi Currency Test User",
+        },
+    )
+    assert user_response.status_code == 201
+
+    # 2. Create a customer account in the selected currency
+    account_response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_response.json()["id"],
+            "name": f"{currency} Account",
+            "currency": currency,
+        },
+    )
+    assert account_response.status_code == 201
+    account_id = account_response.json()["id"]
+
+    # 3. Create a funding account in the SAME currency
+    funding = Account(
+        name="SYSTEM_FUNDING",
+        account_type=AccountType.SYSTEM,
+        currency=currency,
+    )
+    session.add(funding)
+    session.commit()
+
+    # 4. Make the first deposit
+    key = f"multi-deposit-{uuid.uuid4().hex}"
+    headers = {"Idempotency-Key": key}
+
+    body = {
+        "account_id": account_id,
+        "amount_cents": amount_minor,
+        "description": f"{currency} deposit test",
+    }
+
+    first = client.post(
+        "/deposits",
+        json=body,
+        headers=headers,
+    )
+
+    assert first.status_code == 201, first.text
+    assert first.json()["balance_cents"] == amount_minor
+    assert first.json()["currency"] == currency
+
+    # 5. Retry with the same idempotency key
+    second = client.post(
+        "/deposits",
+        json=body,
+        headers=headers,
+    )
+
+    assert second.status_code == 201, second.text
+    assert (
+        second.json()["transaction_id"]
+        == first.json()["transaction_id"]
+    )
+    assert second.json()["balance_cents"] == amount_minor
+@pytest.mark.parametrize(
+    "currency, amount_minor",
+    [
+        ("TND", 12500),
+        ("USD", 1250),
+        ("EUR", 1250),
+    ],
+)
+def test_deposit_supported_currencies(client, session, currency, amount_minor):
+    # 1. Create a test user
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"multi-{uuid.uuid4().hex}@example.com",
+            "full_name": "Multi Currency Test User",
+        },
+    )
+    assert user_response.status_code == 201
+
+    # 2. Create a customer account in the selected currency
+    account_response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_response.json()["id"],
+            "name": f"{currency} Account",
+            "currency": currency,
+        },
+    )
+    assert account_response.status_code == 201
+    account_id = account_response.json()["id"]
+
+    # 3. Create a funding account in the SAME currency
+    funding = Account(
+        name="SYSTEM_FUNDING",
+        account_type=AccountType.SYSTEM,
+        currency=currency,
+    )
+    session.add(funding)
+    session.commit()
+
+    # 4. Make the first deposit
+    key = f"multi-deposit-{uuid.uuid4().hex}"
+    headers = {"Idempotency-Key": key}
+
+    body = {
+        "account_id": account_id,
+        "amount_cents": amount_minor,
+        "description": f"{currency} deposit test",
+    }
+
+    first = client.post(
+        "/deposits",
+        json=body,
+        headers=headers,
+    )
+
+    assert first.status_code == 201, first.text
+    assert first.json()["balance_cents"] == amount_minor
+    assert first.json()["currency"] == currency
+
+    # 5. Retry with the same idempotency key
+    second = client.post(
+        "/deposits",
+        json=body,
+        headers=headers,
+    )
+
+    assert second.status_code == 201, second.text
+    assert (
+        second.json()["transaction_id"]
+        == first.json()["transaction_id"]
+    )
+    assert second.json()["balance_cents"] == amount_minor
+
+
+def test_deposit_without_matching_funding_account(client):
+    # 1. Create a test user
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"missing-{uuid.uuid4().hex}@example.com",
+            "full_name": "Missing Funding Test User",
+        },
+    )
+    assert user_response.status_code == 201
+
+    # 2. Create an EUR customer account
+    account_response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_response.json()["id"],
+            "name": "EUR Account",
+            "currency": "EUR",
+        },
+    )
+    assert account_response.status_code == 201
+
+    # 3. Attempt deposit without an EUR SYSTEM_FUNDING account
+    response = client.post(
+        "/deposits",
+        json={
+            "account_id": account_response.json()["id"],
+            "amount_cents": 1250,
+        },
+        headers={
+            "Idempotency-Key": f"missing-{uuid.uuid4().hex}"
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "EUR SYSTEM_FUNDING account not found"
+    )
+
+
 def test_transfer_api(client, session, world):
     alice = world["alice"]
     bob = world["bob"]
@@ -310,3 +506,257 @@ def test_balance_and_transaction_history(client, session, world):
 
     assert bob_balance.status_code == 200
     assert bob_balance.json()["balance_cents"] == 2000
+
+
+def test_create_account_supported_currencies(client):
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"currencies-{uuid.uuid4().hex}@example.com",
+            "full_name": "Currency Test User"
+        }
+    )
+
+    assert user_response.status_code == 201
+    user_id = user_response.json()["id"]
+
+    for currency in ["TND", "USD", "EUR"]:
+        response = client.post(
+            "/accounts",
+            json={
+                "user_id": user_id,
+                "name": f"{currency} Account",
+                "currency": currency
+            }
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["currency"] == currency
+
+
+def test_create_account_unsupported_currency(client):
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"unsupported-{uuid.uuid4().hex}@example.com",
+            "full_name": "Unsupported Currency User"
+        }
+    )
+
+    assert user_response.status_code == 201
+    user_id = user_response.json()["id"]
+
+    response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": "JPY Account",
+            "currency": "JPY"
+        }
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_account_defaults_to_tnd(client):
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"default-{uuid.uuid4().hex}@example.com",
+            "full_name": "Default Currency User"
+        }
+    )
+
+    assert user_response.status_code == 201
+    user_id = user_response.json()["id"]
+
+    response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": "Default Account"
+        }
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["currency"] == "TND"
+@pytest.mark.parametrize(
+    "currency, amount_minor",
+    [
+        ("TND", 12500),
+        ("USD", 1250),
+        ("EUR", 1250),
+    ],
+)
+def test_same_currency_transfers(
+    client, session, currency, amount_minor
+):
+    # 1. Create two customer accounts
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"transfer-{uuid.uuid4().hex}@example.com",
+            "full_name": "Transfer Test User",
+        },
+    )
+    assert user_response.status_code == 201
+    user_id = user_response.json()["id"]
+
+    source_response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": f"{currency} Source",
+            "currency": currency,
+        },
+    )
+    assert source_response.status_code == 201
+
+    destination_response = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": f"{currency} Destination",
+            "currency": currency,
+        },
+    )
+    assert destination_response.status_code == 201
+
+    source_id = source_response.json()["id"]
+    destination_id = destination_response.json()["id"]
+
+    # 2. Create funding account
+    funding = Account(
+        name="SYSTEM_FUNDING",
+        account_type=AccountType.SYSTEM,
+        currency=currency,
+    )
+    session.add(funding)
+    session.commit()
+
+    # 3. Fund the source account
+    post_transaction(
+        session=session,
+        idempotency_key=f"fund-{uuid.uuid4().hex}",
+        entries=[
+            EntryInput(funding.id, -amount_minor),
+            EntryInput(uuid.UUID(source_id), amount_minor),
+        ],
+        description="Initial test funding",
+    )
+
+    # 4. Transfer the full amount
+    response = client.post(
+        "/transfers",
+        json={
+            "source_account_id": source_id,
+            "destination_account_id": destination_id,
+            "amount_cents": amount_minor,
+            "description": f"{currency} transfer",
+        },
+        headers={
+            "Idempotency-Key": f"transfer-{uuid.uuid4().hex}"
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["currency"] == currency
+    assert response.json()["source_balance_cents"] == 0
+    assert response.json()["destination_balance_cents"] == amount_minor
+def test_reject_cross_currency_transfer(client):
+    # 1. Create a user
+    user_response = client.post(
+        "/users",
+        json={
+            "email": f"cross-{uuid.uuid4().hex}@example.com",
+            "full_name": "Cross Currency Test User",
+        },
+    )
+    assert user_response.status_code == 201
+    user_id = user_response.json()["id"]
+
+    # 2. Create TND source account
+    source = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": "TND Source",
+            "currency": "TND",
+        },
+    )
+    assert source.status_code == 201
+
+    # 3. Create EUR destination account
+    destination = client.post(
+        "/accounts",
+        json={
+            "user_id": user_id,
+            "name": "EUR Destination",
+            "currency": "EUR",
+        },
+    )
+    assert destination.status_code == 201
+
+    # 4. Attempt cross-currency transfer
+    response = client.post(
+        "/transfers",
+        json={
+            "source_account_id": source.json()["id"],
+            "destination_account_id": destination.json()["id"],
+            "amount_cents": 1000,
+        },
+        headers={
+            "Idempotency-Key": f"cross-{uuid.uuid4().hex}"
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Accounts must use the same currency"
+    )
+def test_admin_can_list_all_customer_accounts(client, world):
+    response = client.get("/accounts")
+
+    assert response.status_code == 200
+
+    accounts = response.json()
+    account_ids = {account["id"] for account in accounts}
+
+    assert str(world["alice"].id) in account_ids
+    assert str(world["bob"].id) in account_ids
+
+    # System funding accounts must not be exposed.
+    assert all(
+        account["account_type"] == "CUSTOMER"
+        for account in accounts
+    )
+
+
+def test_customer_can_only_list_own_accounts(
+    client, world, monkeypatch
+):
+    from app import main as api_module
+    from app.security.dependencies import get_current_user
+    from app.db.models import User
+
+    alice_user = User(
+        id=world["alice"].user_id,
+        email="alice-test@finguard.local",
+        full_name="Alice",
+        role="CUSTOMER",
+    )
+
+    monkeypatch.setitem(
+        api_module.app.dependency_overrides,
+        get_current_user,
+        lambda: alice_user,
+    )
+
+    response = client.get("/accounts")
+
+    assert response.status_code == 200
+
+    accounts = response.json()
+
+    assert len(accounts) == 1
+    assert accounts[0]["id"] == str(world["alice"].id)
