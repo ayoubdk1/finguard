@@ -1,14 +1,16 @@
-
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+SupportedCurrency = Literal["TND", "USD", "EUR"]
 
 
 class AccountCreate(BaseModel):
     user_id: UUID
     name: str = Field(min_length=1, max_length=100)
-    currency: str = Field(default="TND", pattern=r"^[A-Z]{3}$")
+    currency: SupportedCurrency = "TND"
 
 
 class AccountResponse(BaseModel):

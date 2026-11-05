@@ -151,6 +151,34 @@ def create_account(
 
 
 # ============================================================
+# 3. LIST CUSTOMER ACCOUNTS
+# ============================================================
+
+@app.get("/accounts", response_model=list[AccountResponse])
+def list_accounts(
+    current_user: User = Depends(get_current_user),
+):
+    with SessionLocal() as db:
+
+        query = select(Account).where(
+            Account.account_type == AccountType.CUSTOMER
+        )
+
+        # Regular users can only see their own accounts.
+        # Administrators can see all customer accounts.
+        if current_user.role != "ADMIN":
+            query = query.where(
+                Account.user_id == current_user.id
+            )
+
+        accounts = db.scalars(
+            query.order_by(Account.created_at.desc())
+        ).all()
+
+        return accounts
+
+
+# ============================================================
 # 4. SIMULATED DEPOSIT
 # ============================================================
 
@@ -180,26 +208,19 @@ def create_deposit(
                 detail="Customer account not found",
             )
 
-        # 2. Check currency
-        if account.currency != "TND":
-            raise HTTPException(
-                status_code=400,
-                detail="Only TND deposits are supported",
-            )
-
-        # 3. Find SYSTEM_FUNDING
+        # 2. Find SYSTEM_FUNDING for the customer's currency
         funding = db.scalar(
             select(Account).where(
                 Account.name == "SYSTEM_FUNDING",
                 Account.account_type == AccountType.SYSTEM,
-                Account.currency == "TND",
+                Account.currency == account.currency,
             )
         )
 
         if funding is None:
             raise HTTPException(
                 status_code=409,
-                detail="TND SYSTEM_FUNDING account not found",
+                detail=f"{account.currency} SYSTEM_FUNDING account not found",
             )
 
         # 4. Post balanced ledger entries
