@@ -20,6 +20,7 @@ from fastapi import Depends, Request, Response, status
 from app.security.rate_limit import check_login_rate_limit
 from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
+from app.security.permissions import Permission, has_permission
 from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
 from app.security.passwords import hash_password, verify_password
 from app.security.tokens import create_access_token
@@ -120,7 +121,19 @@ def create_account(
     data: AccountCreate,
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != "ADMIN" and data.user_id != current_user.id:
+    if not has_permission(
+        current_user.role, Permission.ACCOUNT_CREATE_OWN
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions",
+        )
+    if (
+        not has_permission(
+            current_user.role, Permission.ACCOUNT_CREATE_ANY
+        )
+        and data.user_id != current_user.id
+    ):
         raise HTTPException(
             status_code=403,
             detail="Cannot create account for another user",
@@ -166,7 +179,9 @@ def list_accounts(
 
         # Regular users can only see their own accounts.
         # Administrators can see all customer accounts.
-        if current_user.role != "ADMIN":
+        if not has_permission(
+            current_user.role, Permission.ACCOUNT_READ_ALL
+        ):
             query = query.where(
                 Account.user_id == current_user.id
             )
@@ -192,7 +207,15 @@ def create_deposit(
     ),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_user_owns_account_id(data.account_id, current_user)
+    if not has_permission(
+        current_user.role, Permission.DEPOSIT_CREATE
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
+    ensure_user_owns_account_id(
+        data.account_id, current_user, require_write=True
+    )
 
     with SessionLocal() as db:
 
@@ -312,7 +335,15 @@ def create_transfer(
     ),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_user_owns_account_id(data.source_account_id, current_user)
+    if not has_permission(
+        current_user.role, Permission.TRANSFER_CREATE
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
+    ensure_user_owns_account_id(
+        data.source_account_id, current_user, require_write=True
+    )
 
     with SessionLocal() as db:
 
@@ -568,6 +599,12 @@ def assess_risk_endpoint(
     data: RiskAssessmentRequest,
     current_user: User = Depends(get_current_user),
 ):
+    if not has_permission(
+        current_user.role, Permission.RISK_ASSESS
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
     result = assess_transaction_risk(
         amount_cents=data.amount_cents,
         transfers_last_10min=data.transfers_last_10min,
@@ -586,6 +623,12 @@ def assess_risk_endpoint(
 def get_event_monitoring(
     current_user: User = Depends(get_current_user),
 ):
+    if not has_permission(
+        current_user.role, Permission.MONITORING_READ
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
     with SessionLocal() as db:
 
         # =============================================
