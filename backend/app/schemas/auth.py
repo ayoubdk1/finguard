@@ -89,4 +89,19 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
 
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(min_length=16, max_length=256)
+
+
+class LogoutRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(min_length=16, max_length=256)

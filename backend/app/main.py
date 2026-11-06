@@ -21,9 +21,21 @@ from app.security.rate_limit import check_login_rate_limit
 from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, has_permission
-from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
+from app.schemas.auth import (
+    LoginRequest,
+    LogoutRequest,
+    RefreshRequest,
+    RegisterRequest,
+    RegisterResponse,
+    TokenResponse,
+)
 from app.security.passwords import hash_password, verify_password
-from app.security.tokens import create_access_token
+from app.security.tokens import (
+    create_access_token,
+    issue_refresh_token,
+    revoke_refresh_token,
+    rotate_refresh_token,
+)
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.account import AccountCreate, AccountResponse
 from app.schemas.deposit import DepositCreate
@@ -758,7 +770,46 @@ def login_user(
             )
 
         token = create_access_token(user.id)
-        return TokenResponse(access_token=token)
+        refresh_token, _ = issue_refresh_token(session, user.id)
+        session.commit()
+        return TokenResponse(
+            access_token=token,
+            refresh_token=refresh_token,
+        )
+
+
+@app.post(
+    "/auth/refresh",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+def refresh_access_token(payload: RefreshRequest):
+    with SessionLocal() as session:
+        try:
+            user_id, new_refresh = rotate_refresh_token(
+                session, payload.refresh_token
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(exc),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        access_token = create_access_token(user_id)
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=new_refresh,
+        )
+
+
+@app.post(
+    "/auth/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def logout_user(payload: LogoutRequest):
+    with SessionLocal() as session:
+        revoke_refresh_token(session, payload.refresh_token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get(
