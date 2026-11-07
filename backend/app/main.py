@@ -20,9 +20,22 @@ from fastapi import Depends, Request, Response, status
 from app.security.rate_limit import check_login_rate_limit
 from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
-from app.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
+from app.security.permissions import Permission, has_permission
+from app.schemas.auth import (
+    LoginRequest,
+    LogoutRequest,
+    RefreshRequest,
+    RegisterRequest,
+    RegisterResponse,
+    TokenResponse,
+)
 from app.security.passwords import hash_password, verify_password
-from app.security.tokens import create_access_token
+from app.security.tokens import (
+    create_access_token,
+    issue_refresh_token,
+    revoke_refresh_token,
+    rotate_refresh_token,
+)
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.account import AccountCreate, AccountResponse
 from app.schemas.deposit import DepositCreate
@@ -120,7 +133,19 @@ def create_account(
     data: AccountCreate,
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != "ADMIN" and data.user_id != current_user.id:
+    if not has_permission(
+        current_user.role, Permission.ACCOUNT_CREATE_OWN
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions",
+        )
+    if (
+        not has_permission(
+            current_user.role, Permission.ACCOUNT_CREATE_ANY
+        )
+        and data.user_id != current_user.id
+    ):
         raise HTTPException(
             status_code=403,
             detail="Cannot create account for another user",
@@ -166,7 +191,9 @@ def list_accounts(
 
         # Regular users can only see their own accounts.
         # Administrators can see all customer accounts.
-        if current_user.role != "ADMIN":
+        if not has_permission(
+            current_user.role, Permission.ACCOUNT_READ_ALL
+        ):
             query = query.where(
                 Account.user_id == current_user.id
             )
@@ -192,7 +219,15 @@ def create_deposit(
     ),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_user_owns_account_id(data.account_id, current_user)
+    if not has_permission(
+        current_user.role, Permission.DEPOSIT_CREATE
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
+    ensure_user_owns_account_id(
+        data.account_id, current_user, require_write=True
+    )
 
     with SessionLocal() as db:
 
@@ -312,7 +347,15 @@ def create_transfer(
     ),
     current_user: User = Depends(get_current_user),
 ):
-    ensure_user_owns_account_id(data.source_account_id, current_user)
+    if not has_permission(
+        current_user.role, Permission.TRANSFER_CREATE
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
+    ensure_user_owns_account_id(
+        data.source_account_id, current_user, require_write=True
+    )
 
     with SessionLocal() as db:
 
@@ -568,6 +611,12 @@ def assess_risk_endpoint(
     data: RiskAssessmentRequest,
     current_user: User = Depends(get_current_user),
 ):
+    if not has_permission(
+        current_user.role, Permission.RISK_ASSESS
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
     result = assess_transaction_risk(
         amount_cents=data.amount_cents,
         transfers_last_10min=data.transfers_last_10min,
@@ -586,6 +635,12 @@ def assess_risk_endpoint(
 def get_event_monitoring(
     current_user: User = Depends(get_current_user),
 ):
+    if not has_permission(
+        current_user.role, Permission.MONITORING_READ
+    ):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions"
+        )
     with SessionLocal() as db:
 
         # =============================================
@@ -715,7 +770,46 @@ def login_user(
             )
 
         token = create_access_token(user.id)
-        return TokenResponse(access_token=token)
+        refresh_token, _ = issue_refresh_token(session, user.id)
+        session.commit()
+        return TokenResponse(
+            access_token=token,
+            refresh_token=refresh_token,
+        )
+
+
+@app.post(
+    "/auth/refresh",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+def refresh_access_token(payload: RefreshRequest):
+    with SessionLocal() as session:
+        try:
+            user_id, new_refresh = rotate_refresh_token(
+                session, payload.refresh_token
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(exc),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        access_token = create_access_token(user_id)
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=new_refresh,
+        )
+
+
+@app.post(
+    "/auth/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def logout_user(payload: LogoutRequest):
+    with SessionLocal() as session:
+        revoke_refresh_token(session, payload.refresh_token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get(

@@ -6,9 +6,18 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.db.models import Account, User
 from app.db.session import SessionLocal
+from app.security.permissions import Permission, has_permission
 from app.security.tokens import verify_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def is_demo_mode_allowed() -> bool:
+    if os.getenv("FINGUARD_STRICT_AUTH") == "1":
+        return False
+    if os.getenv("FINGUARD_ENV", "development").lower() == "production":
+        return False
+    return True
 
 
 def get_current_user(
@@ -16,14 +25,12 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> User:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        # Always require a token on /auth/me or when strict auth is enabled
-        if request.url.path == "/auth/me" or os.getenv("FINGUARD_STRICT_AUTH") == "1":
+        if request.url.path == "/auth/me" or not is_demo_mode_allowed():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing or invalid authentication credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        # Allow React Dashboard (DEMO MODE) when no Authorization header is sent
         return User(
             id=uuid4(),
             email="demo@finguard.local",
@@ -73,8 +80,25 @@ def require_role(*allowed_roles: str):
     return role_checker
 
 
+def require_permission(*required_permissions: Permission):
+    def permission_checker(
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if not any(
+            has_permission(current_user.role, perm)
+            for perm in required_permissions
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        return current_user
+
+    return permission_checker
+
+
 def verify_account_ownership(account: Account, current_user: User) -> None:
-    if current_user.role == "ADMIN":
+    if has_permission(current_user.role, Permission.ACCOUNT_READ_ALL):
         return
     if account.user_id != current_user.id:
         raise HTTPException(
@@ -86,8 +110,15 @@ def verify_account_ownership(account: Account, current_user: User) -> None:
 def ensure_user_owns_account_id(
     account_id: UUID | None,
     current_user: User,
+    require_write: bool = False,
 ) -> None:
-    if account_id is None or current_user.role == "ADMIN":
+    if account_id is None:
+        return
+    if not require_write and has_permission(
+        current_user.role, Permission.ACCOUNT_READ_ALL
+    ):
+        return
+    if require_write and current_user.role == "ADMIN":
         return
     with SessionLocal() as session:
         account = session.get(Account, account_id)
