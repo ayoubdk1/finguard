@@ -82,6 +82,8 @@ def issue_refresh_token(
     session: Session,
     user_id: UUID,
     family_id: UUID | None = None,
+    user_agent: str | None = None,
+    ip_address: str | None = None,
 ) -> tuple[str, RefreshToken]:
     raw_token = secrets.token_urlsafe(48)
     now = datetime.now(timezone.utc)
@@ -91,6 +93,8 @@ def issue_refresh_token(
         family_id=family_id or uuid4(),
         token_hash=hash_refresh_token(raw_token),
         expires_at=now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        user_agent=user_agent[:255] if user_agent else None,
+        ip_address=ip_address[:45] if ip_address else None,
     )
     session.add(db_token)
     session.flush()
@@ -100,6 +104,8 @@ def issue_refresh_token(
 def rotate_refresh_token(
     session: Session,
     raw_token: str,
+    user_agent: str | None = None,
+    ip_address: str | None = None,
 ) -> tuple[UUID, str]:
     now = datetime.now(timezone.utc)
     token_hash = hash_refresh_token(raw_token)
@@ -136,6 +142,8 @@ def rotate_refresh_token(
         session,
         user_id=db_token.user_id,
         family_id=db_token.family_id,
+        user_agent=user_agent or db_token.user_agent,
+        ip_address=ip_address or db_token.ip_address,
     )
     db_token.revoked_at = now
     db_token.replaced_by_id = new_db_token.id
@@ -156,6 +164,51 @@ def revoke_refresh_token(session: Session, raw_token: str) -> bool:
         update(RefreshToken)
         .where(
             RefreshToken.family_id == db_token.family_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    session.commit()
+    return True
+
+
+def get_active_sessions_for_user(
+    session: Session,
+    user_id: UUID,
+) -> list[RefreshToken]:
+    now = datetime.now(timezone.utc)
+    return list(
+        session.scalars(
+            select(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at > now,
+            )
+            .order_by(RefreshToken.created_at.desc())
+        ).all()
+    )
+
+
+def revoke_session_by_id(
+    session: Session,
+    session_id: UUID,
+    user_id: UUID,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    target = session.scalar(
+        select(RefreshToken).where(
+            RefreshToken.id == session_id,
+            RefreshToken.user_id == user_id,
+        )
+    )
+    if target is None:
+        return False
+
+    session.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.family_id == target.family_id,
             RefreshToken.revoked_at.is_(None),
         )
         .values(revoked_at=now)

@@ -105,3 +105,23 @@ class LogoutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     refresh_token: str = Field(min_length=16, max_length=256)
+# ============================================
+# ACTIVE SESSIONS
+# ============================================
+
+class SessionItem(BaseModel):
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    family_id: UUID
+    user_agent: str | None = None
+    ip_address: str | None = None
+    created_at: datetime
+    expires_at: datetime
+
+
+class SessionListResponse(BaseModel):
+
+    sessions: list[SessionItem]
+    total_active: int
