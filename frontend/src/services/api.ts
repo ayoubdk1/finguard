@@ -2,6 +2,88 @@
 
 const API_BASE_URL = '/api'
 
+const ACCESS_TOKEN_KEY = 'finguard_access_token'
+const REFRESH_TOKEN_KEY = 'finguard_refresh_token'
+
+export function getAccessToken(): string | null {
+  return localStorage.getItem(ACCESS_TOKEN_KEY)
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_KEY)
+}
+
+export function setTokens(accessToken: string, refreshToken?: string): void {
+  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  if (refreshToken) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  }
+}
+
+export function clearTokens(): void {
+  localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    clearTokens()
+    return null
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+
+    if (!response.ok) {
+      clearTokens()
+      return null
+    }
+
+    const data = await response.json()
+    setTokens(data.access_token, data.refresh_token)
+    return data.access_token
+  } catch {
+    clearTokens()
+    return null
+  }
+}
+
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const headers = {
+    ...getAuthHeaders(),
+    ...(options.headers || {}),
+  }
+
+  let response = await fetch(url, { ...options, headers })
+
+  if (response.status === 401 && getRefreshToken()) {
+    const newToken = await refreshAccessToken()
+    if (newToken) {
+      const retryHeaders = {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${newToken}`,
+      }
+      response = await fetch(url, { ...options, headers: retryHeaders })
+    }
+  }
+
+  return response
+}
+
+
 // Account balance returned by FastAPI
 export interface AccountBalance {
   account_id: string
@@ -16,14 +98,21 @@ export interface CustomerAccount {
   currency: string
   created_at: string
 }
-// Reusable HTTP GET function
+// Reusable HTTP GET function with Auth & Refresh
 async function apiGet<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`)
+  const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`)
 
   if (!response.ok) {
-    throw new Error(
-      `API request failed: ${response.status}`
-    )
+    let message = `API request failed: ${response.status}`
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
   }
 
   return response.json() as Promise<T>
@@ -240,4 +329,97 @@ export interface EventMonitoringResponse {
 
 export async function getEventMonitoring(): Promise<EventMonitoringResponse> {
   return apiGet<EventMonitoringResponse>('/monitoring/events')
+}
+
+// ============================================
+// AUTHENTICATION API
+// ============================================
+
+export interface UserProfile {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  created_at: string
+}
+
+export interface AuthTokenResponse {
+  access_token: string
+  refresh_token?: string
+  token_type: string
+}
+
+export async function loginUser(
+  email: string,
+  password: string
+): Promise<AuthTokenResponse> {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+
+  if (!response.ok) {
+    let message = 'Login failed'
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+
+  const data = (await response.json()) as AuthTokenResponse
+  setTokens(data.access_token, data.refresh_token)
+  return data
+}
+
+export async function registerUser(
+  email: string,
+  fullName: string,
+  password: string
+): Promise<UserProfile> {
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, full_name: fullName, password }),
+  })
+
+  if (!response.ok) {
+    let message = 'Registration failed'
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+
+  return response.json() as Promise<UserProfile>
+}
+
+export async function getCurrentUser(): Promise<UserProfile> {
+  return apiGet<UserProfile>('/auth/me')
+}
+
+export async function logoutUser(): Promise<void> {
+  const refreshToken = getRefreshToken()
+  if (refreshToken) {
+    try {
+      await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+    } catch {
+      // ignore
+    }
+  }
+  clearTokens()
 }

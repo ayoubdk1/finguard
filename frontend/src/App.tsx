@@ -1,6 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
 
+import { LoginForm } from './LoginForm'
 import {
+  getCurrentUser,
+  logoutUser,
+  type UserProfile,
   getAccountBalance,
   getAccountTransactions,
   createTransfer,
@@ -150,6 +154,29 @@ function readPendingTransfer(): PendingTransfer | null {
 }
 
 function App() {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  useEffect(() => {
+    async function checkAuth() {
+      if (typeof window !== 'undefined' && window.localStorage?.getItem('finguard_access_token')) {
+        try {
+          const user = await getCurrentUser()
+          setCurrentUser(user)
+        } catch {
+          setCurrentUser(null)
+        }
+      }
+      setAuthLoading(false)
+    }
+    checkAuth()
+  }, [])
+
+  const handleLogout = async () => {
+    await logoutUser()
+    setCurrentUser(null)
+  }
+
   const [activePage, setActivePage] = useState<
     | 'Dashboard'
     | 'Accounts'
@@ -796,6 +823,17 @@ function App() {
   // DASHBOARD INTERFACE
   // ============================================
 
+  if (!authLoading && !currentUser && (typeof window !== 'undefined' && !!window.localStorage?.getItem('finguard_access_token'))) {
+    return <LoginForm onSuccess={async () => {
+      try {
+        const u = await getCurrentUser()
+        setCurrentUser(u)
+      } catch {
+        // ignore
+      }
+    }} />
+  }
+
   return (
     <div className="app-layout">
 
@@ -867,11 +905,28 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-
-          <div className="system-indicator">
-            <span className="indicator-dot"></span>
-            <span>Demo Environment</span>
-          </div>
+          {currentUser ? (
+            <div style={{ marginBottom: '12px', padding: '10px', background: '#1e293b', borderRadius: '8px', border: '1px solid #334155' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {currentUser.full_name}
+              </div>
+              <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '2px' }}>
+                {currentUser.role}
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                style={{ marginTop: '8px', width: '100%', padding: '6px', background: '#334155', border: 'none', borderRadius: '4px', color: '#cbd5e1', fontSize: '12px', cursor: 'pointer' }}
+              >
+                Se d?connecter
+              </button>
+            </div>
+          ) : (
+            <div className="system-indicator">
+              <span className="indicator-dot"></span>
+              <span>Demo Mode</span>
+            </div>
+          )}
 
           <p>FinGuard v0.1</p>
 
