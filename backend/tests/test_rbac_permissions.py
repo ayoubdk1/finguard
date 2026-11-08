@@ -80,6 +80,11 @@ def test_fraud_analyst_can_assess_risk_but_cannot_transfer(
     client, world, monkeypatch
 ):
     _override_user(monkeypatch, Role.FRAUD_ANALYST)
+    monkeypatch.setattr(
+        api_module,
+        "assess_transaction_risk",
+        lambda **kwargs: {"risk_score": 0.1, "decision": "ALLOW"},
+    )
 
     risk_resp = client.post(
         "/risk/assess",

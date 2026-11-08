@@ -25,6 +25,8 @@ from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
+    SessionItem,
+    SessionListResponse,
     RegisterRequest,
     RegisterResponse,
     TokenResponse,
@@ -32,7 +34,9 @@ from app.schemas.auth import (
 from app.security.passwords import hash_password, verify_password
 from app.security.tokens import (
     create_access_token,
+    get_active_sessions_for_user,
     issue_refresh_token,
+    revoke_session_by_id,
     revoke_refresh_token,
     rotate_refresh_token,
 )
@@ -751,6 +755,7 @@ def register_user(payload: RegisterRequest):
     status_code=status.HTTP_200_OK,
 )
 def login_user(
+    request: Request,
     payload: LoginRequest,
     _rate_limit: None = Depends(check_login_rate_limit),
 ):
@@ -770,7 +775,14 @@ def login_user(
             )
 
         token = create_access_token(user.id)
-        refresh_token, _ = issue_refresh_token(session, user.id)
+        client_ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+        refresh_token, _ = issue_refresh_token(
+            session,
+            user.id,
+            user_agent=user_agent,
+            ip_address=client_ip,
+        )
         session.commit()
         return TokenResponse(
             access_token=token,
@@ -783,11 +795,16 @@ def login_user(
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
 )
-def refresh_access_token(payload: RefreshRequest):
+def refresh_access_token(request: Request, payload: RefreshRequest):
     with SessionLocal() as session:
         try:
+            client_ip = request.client.host if request.client else None
+            user_agent = request.headers.get("user-agent")
             user_id, new_refresh = rotate_refresh_token(
-                session, payload.refresh_token
+                session,
+                payload.refresh_token,
+                user_agent=user_agent,
+                ip_address=client_ip,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -809,6 +826,38 @@ def refresh_access_token(payload: RefreshRequest):
 def logout_user(payload: LogoutRequest):
     with SessionLocal() as session:
         revoke_refresh_token(session, payload.refresh_token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+
+
+@app.get(
+    "/auth/sessions",
+    response_model=SessionListResponse,
+    status_code=status.HTTP_200_OK,
+)
+def list_active_sessions(current_user: User = Depends(get_current_user)):
+    with SessionLocal() as session:
+        active_tokens = get_active_sessions_for_user(session, current_user.id)
+        items = [SessionItem.model_validate(tok) for tok in active_tokens]
+        return SessionListResponse(sessions=items, total_active=len(items))
+
+
+@app.delete(
+    "/auth/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_session(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    with SessionLocal() as session:
+        revoked = revoke_session_by_id(session, session_id, current_user.id)
+        if not revoked:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
