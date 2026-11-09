@@ -215,3 +215,33 @@ def revoke_session_by_id(
     )
     session.commit()
     return True
+
+def create_mfa_token(user_id: UUID) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "type": "mfa_pending",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+        "jti": str(uuid4()),
+    }
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def verify_mfa_token(token: str) -> UUID:
+    try:
+        payload = jwt.decode(
+            token,
+            get_jwt_secret(),
+            algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+            audience=JWT_AUDIENCE,
+            options={"require": ["sub", "iat", "exp", "iss", "aud", "jti"]},
+        )
+        if payload.get("type") != "mfa_pending":
+            raise ValueError("Invalid MFA challenge token")
+        return UUID(payload["sub"])
+    except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError("Invalid or expired MFA token") from exc

@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -51,7 +52,17 @@ class User(Base):
         nullable=False,
         server_default="CUSTOMER",
     )
-
+    # Multi-Factor Authentication (TOTP)
+    mfa_secret: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    mfa_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default="false",
+        nullable=False,
+        default=False,
+    )
     accounts: Mapped[list["Account"]] = relationship(back_populates="user")    
 
 class Account(Base):

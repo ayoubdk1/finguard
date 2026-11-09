@@ -27,14 +27,20 @@ from app.schemas.auth import (
     RefreshRequest,
     SessionItem,
     SessionListResponse,
+    MfaLoginRequest,
+    MfaSetupResponse,
+    MfaVerifyRequest,
     RegisterRequest,
     RegisterResponse,
     TokenResponse,
 )
 from app.security.passwords import hash_password, verify_password
+from app.security.mfa import generate_mfa_secret, generate_totp_uri, verify_totp_code
 from app.security.tokens import (
     create_access_token,
+    create_mfa_token,
     get_active_sessions_for_user,
+    verify_mfa_token,
     issue_refresh_token,
     revoke_session_by_id,
     revoke_refresh_token,
@@ -774,6 +780,14 @@ def login_user(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+        if user.mfa_enabled:
+            mfa_tok = create_mfa_token(user.id)
+            return TokenResponse(
+                access_token="",
+                mfa_required=True,
+                mfa_token=mfa_tok,
+            )
+
         token = create_access_token(user.id)
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
@@ -829,6 +843,115 @@ def logout_user(payload: LogoutRequest):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+
+
+
+
+# ============================================================
+# MULTI-FACTOR AUTHENTICATION (TOTP)
+# ============================================================
+
+@app.post(
+    "/auth/mfa/setup",
+    response_model=MfaSetupResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_setup(current_user: User = Depends(get_current_user)):
+    with SessionLocal() as session:
+        user = session.get(User, current_user.id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        secret = generate_mfa_secret()
+        user.mfa_secret = secret
+        session.commit()
+
+        uri = generate_totp_uri(secret, user.email)
+        return MfaSetupResponse(secret=secret, otpauth_uri=uri)
+
+
+@app.post(
+    "/auth/mfa/enable",
+    status_code=status.HTTP_200_OK,
+)
+def mfa_enable(
+    payload: MfaVerifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    with SessionLocal() as session:
+        user = session.get(User, current_user.id)
+        if user is None or not user.mfa_secret:
+            raise HTTPException(status_code=400, detail="MFA setup has not been initiated")
+
+        if not verify_totp_code(user.mfa_secret, payload.code):
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+
+        user.mfa_enabled = True
+        session.commit()
+        return {"status": "MFA successfully enabled"}
+
+
+@app.post(
+    "/auth/mfa/disable",
+    status_code=status.HTTP_200_OK,
+)
+def mfa_disable(
+    payload: MfaVerifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    with SessionLocal() as session:
+        user = session.get(User, current_user.id)
+        if user is None or not user.mfa_enabled or not user.mfa_secret:
+            raise HTTPException(status_code=400, detail="MFA is not enabled")
+
+        if not verify_totp_code(user.mfa_secret, payload.code):
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+
+        user.mfa_enabled = False
+        user.mfa_secret = None
+        session.commit()
+        return {"status": "MFA successfully disabled"}
+
+
+@app.post(
+    "/auth/mfa/login",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_login(
+    request: Request,
+    payload: MfaLoginRequest,
+):
+    try:
+        user_id = verify_mfa_token(payload.mfa_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None or not user.mfa_enabled or not user.mfa_secret:
+            raise HTTPException(status_code=400, detail="MFA not active for this account")
+
+        if not verify_totp_code(user.mfa_secret, payload.code):
+            raise HTTPException(status_code=401, detail="Invalid MFA code")
+
+        token = create_access_token(user.id)
+        client_ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+        refresh_token, _ = issue_refresh_token(
+            session,
+            user.id,
+            user_agent=user_agent,
+            ip_address=client_ip,
+        )
+        session.commit()
+        return TokenResponse(
+            access_token=token,
+            refresh_token=refresh_token,
+        )
 
 
 @app.get(

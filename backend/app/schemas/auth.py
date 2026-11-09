@@ -91,6 +91,8 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str | None = None
     token_type: str = "bearer"
+    mfa_required: bool = False
+    mfa_token: str | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -125,3 +127,28 @@ class SessionListResponse(BaseModel):
 
     sessions: list[SessionItem]
     total_active: int
+
+# ============================================
+# MULTI-FACTOR AUTHENTICATION (TOTP)
+# ============================================
+
+class MfaSetupResponse(BaseModel):
+
+    secret: str
+    otpauth_uri: str
+    issuer: str = "FinGuard"
+
+
+class MfaVerifyRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=6, max_length=6)
+
+
+class MfaLoginRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    mfa_token: str
+    code: str = Field(min_length=6, max_length=6)
