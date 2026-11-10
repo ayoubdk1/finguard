@@ -1,3 +1,5 @@
+from decimal import Decimal
+from app.services.fx import get_latest_rate, calculate_fx_conversion, FXError, ExchangeRateNotFound
 from app.services.limits import check_transfer_limits, TransactionLimitExceeded, DailyLimitExceeded
 
 from uuid import UUID
@@ -406,13 +408,6 @@ def create_transfer(
                 detail="Transfers require customer accounts",
             )
 
-        # 4. Check currency
-        if source.currency != destination.currency:
-            raise HTTPException(
-                status_code=400,
-                detail="Accounts must use the same currency",
-            )
-
         # 4b. Enforce per-transaction and rolling 24-hour limits
         try:
             check_transfer_limits(db, source.id, data.amount_cents)
@@ -422,33 +417,75 @@ def create_transfer(
                 detail=str(exc),
             )
 
-        # 5. Post ledger transaction AND enqueue outbox event
-        try:
-            tx = post_transaction(
-                session=db,
-                idempotency_key=idempotency_key,
-                entries=[
-                    EntryInput(
-                        source.id,
-                        -data.amount_cents,
-                    ),
-                    EntryInput(
-                        destination.id,
-                        data.amount_cents,
-                    ),
-                ],
-                description=data.description,
+        # 5. Post ledger transaction: Same-Currency vs Cross-Currency FX
+        is_fx = source.currency != destination.currency
+        converted_amount_cents = None
+        fee_cents = None
+        effective_rate = None
 
-                # Outbox integration
-                before_commit=lambda session, tx: enqueue_transfer_posted(
-                    session=session,
-                    transaction_id=tx.id,
-                    source_account_id=source.id,
-                    destination_account_id=destination.id,
-                    amount_cents=data.amount_cents,
-                    currency=source.currency,
-                ),
-            )
+        try:
+            if not is_fx:
+                tx = post_transaction(
+                    session=db,
+                    idempotency_key=idempotency_key,
+                    entries=[
+                        EntryInput(source.id, -data.amount_cents),
+                        EntryInput(destination.id, data.amount_cents),
+                    ],
+                    description=data.description,
+                    before_commit=lambda session, tx: enqueue_transfer_posted(
+                        session=session,
+                        transaction_id=tx.id,
+                        source_account_id=source.id,
+                        destination_account_id=destination.id,
+                        amount_cents=data.amount_cents,
+                        currency=source.currency,
+                    ),
+                )
+            else:
+                try:
+                    fx_rate = get_latest_rate(db, source.currency, destination.currency)
+                except ExchangeRateNotFound as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+
+                converted_amount_cents, fee_cents, effective_rate = calculate_fx_conversion(
+                    source_amount_cents=data.amount_cents,
+                    base_currency=source.currency,
+                    target_currency=destination.currency,
+                    rate_scaled=fx_rate.rate,
+                    fee_bps=fx_rate.fee_bps,
+                )
+
+                sys_fx_src = db.scalar(
+                    select(Account).where(Account.name == "SYSTEM_FX", Account.currency == source.currency)
+                )
+                sys_fx_dst = db.scalar(
+                    select(Account).where(Account.name == "SYSTEM_FX", Account.currency == destination.currency)
+                )
+                if sys_fx_src is None or sys_fx_dst is None:
+                    raise HTTPException(status_code=500, detail="SYSTEM_FX clearing account not configured")
+
+                # Post source currency debit/credit to SYSTEM_FX
+                tx = post_transaction(
+                    session=db,
+                    idempotency_key=idempotency_key,
+                    entries=[
+                        EntryInput(source.id, -data.amount_cents),
+                        EntryInput(sys_fx_src.id, data.amount_cents),
+                    ],
+                    description=data.description,
+                )
+
+                # Post target currency delivery to destination
+                post_transaction(
+                    session=db,
+                    idempotency_key=f"{idempotency_key}:fx_delivery",
+                    entries=[
+                        EntryInput(sys_fx_dst.id, -converted_amount_cents),
+                        EntryInput(destination.id, converted_amount_cents),
+                    ],
+                    description=f"FX from {source.id} ({source.currency}->{destination.currency})",
+                )
 
         except InsufficientFunds as exc:
             raise HTTPException(
@@ -490,10 +527,16 @@ def create_transfer(
             for row in rows
         }
 
-        expected_entries = {
-            (source.id, -data.amount_cents),
-            (destination.id, data.amount_cents),
-        }
+        if not is_fx:
+            expected_entries = {
+                (source.id, -data.amount_cents),
+                (destination.id, data.amount_cents),
+            }
+        else:
+            expected_entries = {
+                (source.id, -data.amount_cents),
+                (sys_fx_src.id, data.amount_cents),
+            }
 
         if (
             len(rows) != 2
@@ -513,6 +556,11 @@ def create_transfer(
             "destination_account_id": destination.id,
             "amount_cents": data.amount_cents,
             "currency": source.currency,
+            "is_fx": is_fx,
+            "target_currency": destination.currency if is_fx else None,
+            "converted_amount_cents": converted_amount_cents,
+            "fee_cents": fee_cents,
+            "exchange_rate": float(effective_rate) if effective_rate else None,
             "source_balance_cents": get_balance(
                 db,
                 source.id,
@@ -533,6 +581,28 @@ def create_transfer(
 # ============================================================
 # 5b. REFUND TRANSFER
 # ============================================================
+
+
+
+# ============================================================
+# 5c. FOREIGN EXCHANGE RATES
+# ============================================================
+
+@app.get("/fx/rates")
+def list_exchange_rates():
+    with SessionLocal() as db:
+        from app.db.models import ExchangeRate
+        rates = db.scalars(select(ExchangeRate).order_by(ExchangeRate.base_currency, ExchangeRate.target_currency)).all()
+        return [
+            {
+                "base_currency": r.base_currency,
+                "target_currency": r.target_currency,
+                "rate": float(Decimal(r.rate) / Decimal(1_000_000)),
+                "fee_bps": r.fee_bps,
+            }
+            for r in rates
+        ]
+
 
 @app.post("/transfers/{transfer_id}/refund", response_model=TransferResponse, status_code=201)
 def refund_transfer(

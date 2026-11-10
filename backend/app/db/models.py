@@ -248,3 +248,34 @@ class RefreshToken(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+class ExchangeRate(Base):
+    __tablename__ = "exchange_rates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    base_currency: Mapped[str] = mapped_column(
+        String(3),
+        nullable=False,
+    )
+    target_currency: Mapped[str] = mapped_column(
+        String(3),
+        nullable=False,
+    )
+    rate: Mapped[int] = mapped_column(
+        BigInteger,  # Fixed-point rate scaled by 1,000,000 (e.g. 1.085000 = 1085000)
+        nullable=False,
+    )
+    fee_bps: Mapped[int] = mapped_column(
+        Integer,  # 50 bps = 0.5%
+        default=50,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )

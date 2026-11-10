@@ -663,57 +663,35 @@ def test_same_currency_transfers(
     assert response.json()["currency"] == currency
     assert response.json()["source_balance_cents"] == 0
     assert response.json()["destination_balance_cents"] == amount_minor
-def test_reject_cross_currency_transfer(client):
-    # 1. Create a user
-    user_response = client.post(
-        "/users",
-        json={
-            "email": f"cross-{uuid.uuid4().hex}@example.com",
-            "full_name": "Cross Currency Test User",
-        },
+def test_reject_cross_currency_transfer(client, world, session):
+    # Deposit funds into Alice's account
+    client.post(
+        "/deposits",
+        headers={"Idempotency-Key": f"dep-{uuid.uuid4()}"},
+        json={"account_id": str(world["alice"].id), "amount_cents": 5000},
     )
-    assert user_response.status_code == 201
-    user_id = user_response.json()["id"]
 
-    # 2. Create TND source account
-    source = client.post(
-        "/accounts",
-        json={
-            "user_id": user_id,
-            "name": "TND Source",
-            "currency": "TND",
-        },
+    from app.db.models import Account, AccountType
+    unsupported_acc = Account(
+        user_id=world["bob"].user_id,
+        name="Unsupported Currency Account",
+        account_type=AccountType.CUSTOMER,
+        currency="GBP",
     )
-    assert source.status_code == 201
+    session.add(unsupported_acc)
+    session.commit()
 
-    # 3. Create EUR destination account
-    destination = client.post(
-        "/accounts",
-        json={
-            "user_id": user_id,
-            "name": "EUR Destination",
-            "currency": "EUR",
-        },
-    )
-    assert destination.status_code == 201
-
-    # 4. Attempt cross-currency transfer
     response = client.post(
         "/transfers",
         json={
-            "source_account_id": source.json()["id"],
-            "destination_account_id": destination.json()["id"],
+            "source_account_id": str(world["alice"].id),
+            "destination_account_id": str(unsupported_acc.id),
             "amount_cents": 1000,
         },
-        headers={
-            "Idempotency-Key": f"cross-{uuid.uuid4().hex}"
-        },
+        headers={"Idempotency-Key": f"cross-{uuid.uuid4().hex}"},
     )
-
     assert response.status_code == 400
-    assert response.json()["detail"] == (
-        "Accounts must use the same currency"
-    )
+    assert "no exchange rate found" in response.json()["detail"].lower()
 def test_admin_can_list_all_customer_accounts(client, world):
     response = client.get("/accounts")
 
