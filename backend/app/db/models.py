@@ -279,3 +279,58 @@ class ExchangeRate(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+class FraudAlertStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    INVESTIGATING = "INVESTIGATING"
+    APPROVED = "APPROVED"
+    BLOCKED = "BLOCKED"
+
+
+class FraudAlert(Base):
+    __tablename__ = "fraud_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("transactions.id"),
+        nullable=True,
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id"),
+        nullable=False,
+    )
+    risk_score: Mapped[float] = mapped_column(
+        BigInteger,  # Score scaled by 1000 (e.g. 0.850 = 850)
+        nullable=False,
+    )
+    reasons: Mapped[str] = mapped_column(
+        String(500),
+        default="",
+        nullable=False,
+    )
+    status: Mapped[FraudAlertStatus] = mapped_column(
+        Enum(FraudAlertStatus, name="fraud_alert_status"),
+        default=FraudAlertStatus.PENDING,
+        nullable=False,
+    )
+    analyst_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+    analyst_notes: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

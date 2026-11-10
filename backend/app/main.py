@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from app.schemas.fraud import FraudAlertResponse, FraudResolutionRequest
+from app.db.models import FraudAlert, FraudAlertStatus
 from decimal import Decimal
 from app.services.fx import get_latest_rate, calculate_fx_conversion, FXError, ExchangeRateNotFound
 from app.services.limits import check_transfer_limits, TransactionLimitExceeded, DailyLimitExceeded
@@ -776,6 +779,107 @@ def account_transactions(
 # ============================================================
 # 8. FRAUD RISK ASSESSMENT
 # ============================================================
+
+
+
+# ============================================================
+# 8b. FRAUD MANAGEMENT & INVESTIGATIONS
+# ============================================================
+
+@app.get("/fraud/alerts", response_model=list[FraudAlertResponse])
+def list_fraud_alerts(
+    status_filter: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.FRAUD_ALERT_READ):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as db:
+        query = select(FraudAlert)
+        if status_filter:
+            query = query.where(FraudAlert.status == status_filter.upper())
+        alerts = db.scalars(query.order_by(FraudAlert.created_at.desc())).all()
+        return [
+            FraudAlertResponse(
+                id=a.id,
+                transaction_id=a.transaction_id,
+                account_id=a.account_id,
+                risk_score=float(a.risk_score) / 1000.0,
+                reasons=a.reasons,
+                status=a.status.value if hasattr(a.status, 'value') else str(a.status),
+                analyst_id=a.analyst_id,
+                analyst_notes=a.analyst_notes,
+                created_at=a.created_at,
+                resolved_at=a.resolved_at,
+            )
+            for a in alerts
+        ]
+
+
+@app.post("/fraud/alerts/{alert_id}/investigate", response_model=FraudAlertResponse)
+def start_investigation(
+    alert_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.FRAUD_ALERT_RESOLVE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as db:
+        alert = db.get(FraudAlert, alert_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Fraud alert not found")
+
+        alert.status = FraudAlertStatus.INVESTIGATING.value
+        alert.analyst_id = current_user.id
+        db.commit()
+        db.refresh(alert)
+        return FraudAlertResponse(
+            id=alert.id,
+            transaction_id=alert.transaction_id,
+            account_id=alert.account_id,
+            risk_score=float(alert.risk_score) / 1000.0,
+            reasons=alert.reasons,
+            status=alert.status if isinstance(alert.status, str) else alert.status.value,
+            analyst_id=alert.analyst_id,
+            analyst_notes=alert.analyst_notes,
+            created_at=alert.created_at,
+            resolved_at=alert.resolved_at,
+        )
+
+
+@app.post("/fraud/alerts/{alert_id}/resolve", response_model=FraudAlertResponse)
+def resolve_alert(
+    alert_id: UUID,
+    payload: FraudResolutionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.FRAUD_ALERT_RESOLVE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as db:
+        alert = db.get(FraudAlert, alert_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Fraud alert not found")
+
+        alert.status = payload.decision
+        alert.analyst_id = current_user.id
+        alert.analyst_notes = payload.analyst_notes
+        alert.resolved_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(alert)
+        return FraudAlertResponse(
+            id=alert.id,
+            transaction_id=alert.transaction_id,
+            account_id=alert.account_id,
+            risk_score=float(alert.risk_score) / 1000.0,
+            reasons=alert.reasons,
+            status=alert.status if isinstance(alert.status, str) else alert.status.value,
+            analyst_id=alert.analyst_id,
+            analyst_notes=alert.analyst_notes,
+            created_at=alert.created_at,
+            resolved_at=alert.resolved_at,
+        )
+
 
 @app.post("/risk/assess")
 def assess_risk_endpoint(
