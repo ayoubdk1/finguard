@@ -1,3 +1,4 @@
+from app.services.limits import check_transfer_limits, TransactionLimitExceeded, DailyLimitExceeded
 
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from app.db.models import (
     AccountType,
     LedgerEntry,
     Transaction,
+    TransactionStatus,
     OutboxEvent,
     ProcessedEvent,
 )
@@ -49,7 +51,7 @@ from app.security.tokens import (
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.account import AccountCreate, AccountResponse
 from app.schemas.deposit import DepositCreate
-from app.schemas.transfer import TransferCreate
+from app.schemas.transfer import TransferCreate, TransferResponse
 from app.schemas.balance import BalanceResponse
 from app.schemas.history import (
     TransactionHistoryItem,
@@ -376,10 +378,11 @@ def create_transfer(
                 detail="Cannot transfer to the same account",
             )
 
-        # 2. Find both accounts
-        source = db.get(
-            Account,
-            data.source_account_id,
+        # 2. Find both accounts with pessimistic row lock on source account (race condition protection)
+        source = db.scalar(
+            select(Account)
+            .where(Account.id == data.source_account_id)
+            .with_for_update()
         )
 
         destination = db.get(
@@ -408,6 +411,15 @@ def create_transfer(
             raise HTTPException(
                 status_code=400,
                 detail="Accounts must use the same currency",
+            )
+
+        # 4b. Enforce per-transaction and rolling 24-hour limits
+        try:
+            check_transfer_limits(db, source.id, data.amount_cents)
+        except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
             )
 
         # 5. Post ledger transaction AND enqueue outbox event
@@ -515,6 +527,85 @@ def create_transfer(
 # ============================================================
 # 6. ACCOUNT BALANCE
 # ============================================================
+
+
+
+# ============================================================
+# 5b. REFUND TRANSFER
+# ============================================================
+
+@app.post("/transfers/{transfer_id}/refund", response_model=TransferResponse, status_code=201)
+def refund_transfer(
+    transfer_id: UUID,
+    idempotency_key: str = Header(
+        min_length=1,
+        max_length=100,
+        alias="Idempotency-Key",
+    ),
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.TRANSFER_CREATE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as db:
+        original_tx = db.get(Transaction, transfer_id)
+        if original_tx is None:
+            raise HTTPException(status_code=404, detail="Original transaction not found")
+
+        if original_tx.status != TransactionStatus.POSTED:
+            raise HTTPException(status_code=400, detail="Only posted transactions can be refunded")
+
+        # Sort entries: debit entry (negative) and credit entry (positive)
+        entries = sorted(original_tx.entries, key=lambda e: e.amount)
+        if len(entries) != 2:
+            raise HTTPException(status_code=400, detail="Cannot refund non-transfer transaction")
+
+        debit_entry, credit_entry = entries[0], entries[1]
+        orig_source_id = debit_entry.account_id
+        orig_dest_id = credit_entry.account_id
+        transfer_amount = credit_entry.amount
+
+        # User must own original source account (or be ADMIN)
+        ensure_user_owns_account_id(orig_source_id, current_user, require_write=True)
+
+        # Check for duplicate refund
+        existing_refund = db.scalar(
+            select(Transaction).where(
+                Transaction.description == f"Refund of {original_tx.id}",
+                Transaction.status == TransactionStatus.POSTED,
+            )
+        )
+        if existing_refund:
+            raise HTTPException(status_code=409, detail="Transaction has already been refunded")
+
+        # Mirror entry: Debit original destination, Credit original source
+        try:
+            refund_tx = post_transaction(
+                session=db,
+                idempotency_key=idempotency_key,
+                entries=[
+                    EntryInput(orig_dest_id, -transfer_amount),
+                    EntryInput(orig_source_id, transfer_amount),
+                ],
+                description=f"Refund of {original_tx.id}",
+            )
+        except InsufficientFunds as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Refund failed: recipient has insufficient funds ({exc})",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return TransferResponse(
+            transaction_id=str(refund_tx.id),
+            status=refund_tx.status.value,
+            amount_cents=transfer_amount,
+            source_account_id=str(orig_dest_id),
+            destination_account_id=str(orig_source_id),
+            created_at=refund_tx.created_at.isoformat(),
+        )
+
 
 @app.get(
     "/accounts/{account_id}/balance",

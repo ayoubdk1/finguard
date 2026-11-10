@@ -12,3 +12,11 @@ class TransferCreate(BaseModel):
         default="Simulated transfer",
         max_length=255
     )
+
+class TransferResponse(BaseModel):
+    transaction_id: str
+    status: str
+    amount_cents: int
+    source_account_id: str
+    destination_account_id: str
+    created_at: str
