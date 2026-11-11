@@ -112,6 +112,37 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/health/ready")
+def readiness_check():
+    checks: dict[str, str] = {}
+    is_ready = True
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception:
+        checks["postgres"] = "error"
+        is_ready = False
+
+    try:
+        from app.security.rate_limit import _get_redis_client
+        r = _get_redis_client()
+        if r is not None and r.ping():
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "disabled"
+    except Exception:
+        checks["redis"] = "degraded"
+
+    if not is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "checks": checks},
+        )
+    return {"status": "ready", "checks": checks}
+
+
 # ============================================================
 # 2. CREATE USER
 # ============================================================
