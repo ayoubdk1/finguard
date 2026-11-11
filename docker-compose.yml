@@ -52,6 +52,20 @@ services:
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
+  # ====================================
+  # Redis (Distributed Rate Limiting)
+  # ====================================
+  redis:
+    image: redis:7-alpine
+    container_name: finguard-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 # ====================================
 # Persistent Docker Volumes
 # ====================================
