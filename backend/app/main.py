@@ -29,6 +29,9 @@ from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, has_permission
 from app.schemas.auth import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    ResetPasswordRequest,
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
@@ -44,6 +47,9 @@ from app.schemas.auth import (
 from app.security.passwords import hash_password, verify_password
 from app.security.mfa import generate_mfa_secret, generate_totp_uri, verify_totp_code
 from app.security.tokens import (
+    create_password_reset_token,
+    revoke_all_user_sessions,
+    verify_password_reset_token,
     create_access_token,
     create_mfa_token,
     get_active_sessions_for_user,
@@ -1278,6 +1284,77 @@ def revoke_session(
                 detail="Session not found",
             )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post(
+    "/auth/forgot-password",
+    response_model=ForgotPasswordResponse,
+    status_code=status.HTTP_200_OK,
+)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    _rate_limit: None = Depends(check_login_rate_limit),
+):
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(User).where(User.email == payload.email)
+        )
+        reset_token: str | None = None
+        if user is not None and user.password_hash:
+            reset_token = create_password_reset_token(
+                user_id=user.id,
+                email=user.email,
+                current_password_hash=user.password_hash,
+            )
+
+        return ForgotPasswordResponse(
+            message="Si un compte correspond ? cet email, un jeton de r?initialisation a ?t? g?n?r?.",
+            reset_token=reset_token,
+        )
+
+
+@app.post(
+    "/auth/reset-password",
+    status_code=status.HTTP_200_OK,
+)
+def reset_password(
+    payload: ResetPasswordRequest,
+    _rate_limit: None = Depends(check_login_rate_limit),
+):
+    import hashlib as _hashlib
+    import jwt as _jwt
+
+    try:
+        claims = verify_password_reset_token(payload.reset_token)
+        user_id = UUID(str(claims["sub"]))
+    except (_jwt.InvalidTokenError, ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token",
+        ) from exc
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None or not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired password reset token",
+            )
+
+        expected_fgp = _hashlib.sha256(
+            user.password_hash.encode("utf-8")
+        ).hexdigest()[:16]
+        if claims.get("pwd_fgp") != expected_fgp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password reset token has already been used",
+            )
+
+        user.password_hash = hash_password(payload.new_password)
+        revoke_all_user_sessions(session, user.id)
+        session.commit()
+
+        return {"status": "password_reset_success"}
 
 
 @app.get(

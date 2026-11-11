@@ -1,3 +1,4 @@
+from typing import Any
 import hashlib
 import os
 import secrets
@@ -245,3 +246,58 @@ def verify_mfa_token(token: str) -> UUID:
         return UUID(payload["sub"])
     except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as exc:
         raise ValueError("Invalid or expired MFA token") from exc
+
+
+PASSWORD_RESET_EXPIRE_MINUTES = 15
+
+
+def create_password_reset_token(
+    *,
+    user_id: UUID,
+    email: str,
+    current_password_hash: str,
+    expires_delta: timedelta | None = None,
+) -> str:
+    """
+    Create a short-lived signed JWT for password reset.
+    Includes a fingerprint of current_password_hash so the token is automatically
+    single-use once the password changes.
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + (
+        expires_delta
+        if expires_delta is not None
+        else timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
+    )
+    pwd_fgp = hashlib.sha256(current_password_hash.encode("utf-8")).hexdigest()[:16]
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "email": email,
+        "purpose": "password_reset",
+        "pwd_fgp": pwd_fgp,
+        "iat": now,
+        "exp": expire,
+    }
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> dict[str, Any]:
+    """Verify a password reset JWT and ensure its purpose is 'password_reset'."""
+    payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
+    if payload.get("purpose") != "password_reset":
+        raise ValueError("Invalid token purpose")
+    return payload
+
+
+def revoke_all_user_sessions(db: Session, user_id: UUID) -> None:
+    """Revoke all active refresh tokens for a user (e.g., after password reset)."""
+    now = datetime.now(timezone.utc)
+    db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    db.flush()

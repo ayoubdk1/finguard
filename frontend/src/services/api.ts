@@ -423,3 +423,58 @@ export async function logoutUser(): Promise<void> {
   }
   clearTokens()
 }
+
+
+export interface ForgotPasswordResponse {
+  message: string
+  reset_token?: string | null
+}
+
+export async function requestPasswordReset(email: string): Promise<ForgotPasswordResponse> {
+  const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+
+  if (!response.ok) {
+    let message = 'Password reset request failed'
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+
+  return response.json() as Promise<ForgotPasswordResponse>
+}
+
+export async function confirmPasswordReset(
+  resetToken: string,
+  newPassword: string
+): Promise<{ status: string }> {
+  const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+  })
+
+  if (!response.ok) {
+    let message = 'Password reset failed'
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+
+  return response.json() as Promise<{ status: string }>
+}
