@@ -16,3 +16,4 @@ PyJWT>=2.10,<3
 email-validator>=2.2,<3
 
 redis>=5.0.0
+pyotp>=2.9.0
