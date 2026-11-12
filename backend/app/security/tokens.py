@@ -39,6 +39,7 @@ def create_access_token(user_id: UUID) -> str:
         "exp": now + timedelta(
             minutes=ACCESS_TOKEN_EXPIRE_MINUTES
         ),
+        "type": "access",
         "iss": JWT_ISSUER,
         "aud": JWT_AUDIENCE,
         "jti": str(uuid4()),
@@ -67,6 +68,8 @@ def verify_access_token(token: str) -> UUID:
             },
         )
 
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type: expected access token")
         return UUID(payload["sub"])
 
     except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as exc:
@@ -225,7 +228,7 @@ def create_mfa_token(user_id: UUID) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=5),
         "iss": JWT_ISSUER,
-        "aud": JWT_AUDIENCE,
+        "aud": f"{JWT_AUDIENCE}:mfa",
         "jti": str(uuid4()),
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
@@ -238,7 +241,7 @@ def verify_mfa_token(token: str) -> UUID:
             get_jwt_secret(),
             algorithms=[JWT_ALGORITHM],
             issuer=JWT_ISSUER,
-            audience=JWT_AUDIENCE,
+            audience=f"{JWT_AUDIENCE}:mfa",
             options={"require": ["sub", "iat", "exp", "iss", "aud", "jti"]},
         )
         if payload.get("type") != "mfa_pending":

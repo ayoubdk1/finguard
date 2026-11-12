@@ -13,11 +13,13 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def is_demo_mode_allowed() -> bool:
-    if os.getenv("FINGUARD_STRICT_AUTH") == "1":
+    env = os.getenv("FINGUARD_ENV", "development").lower()
+    demo_flag = os.getenv("FINGUARD_DEMO_MODE") == "1"
+    if env == "production" and demo_flag:
+        raise RuntimeError("FATAL: FINGUARD_DEMO_MODE=1 cannot be enabled when FINGUARD_ENV=production")
+    if os.getenv("FINGUARD_STRICT_AUTH") == "1" or env == "production":
         return False
-    if os.getenv("FINGUARD_ENV", "development").lower() == "production":
-        return False
-    return os.getenv("FINGUARD_DEMO_MODE") == "1"
+    return demo_flag
 
 
 def get_current_user(

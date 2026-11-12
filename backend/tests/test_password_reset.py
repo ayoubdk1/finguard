@@ -3,7 +3,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_forgot_and_reset_password_flow():
+def test_forgot_and_reset_password_flow(monkeypatch):
+    monkeypatch.setenv('FINGUARD_EXPOSE_RESET_TOKEN', '1')
     client = TestClient(app)
 
     email = f"reset.{uuid.uuid4().hex[:8]}@example.com"

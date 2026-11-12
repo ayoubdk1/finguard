@@ -60,7 +60,7 @@ class User(Base):
     )
     # Multi-Factor Authentication (TOTP)
     mfa_secret: Mapped[str | None] = mapped_column(
-        String(64),
+        String(255),
         nullable=True,
     )
     mfa_enabled: Mapped[bool] = mapped_column(

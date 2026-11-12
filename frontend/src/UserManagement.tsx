@@ -45,7 +45,20 @@ export function UserManagement() {
   }
 
   useEffect(() => {
-    void loadUsers()
+    let active = true
+    listAdminUsers()
+      .then((list) => {
+        if (active) setUsers(list)
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : 'Erreur de chargement')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
   }, [])
 
   const handleCreateUser = async (e: React.FormEvent) => {

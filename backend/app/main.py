@@ -1,3 +1,9 @@
+import logging
+from fastapi.middleware.cors import CORSMiddleware
+from app.core.logging import configure_json_logging
+configure_json_logging()
+logger = logging.getLogger('finguard.security')
+import os
 from datetime import datetime, timezone
 from app.schemas.fraud import FraudAlertResponse, FraudResolutionRequest
 from app.db.models import FraudAlert, FraudAlertStatus
@@ -51,7 +57,7 @@ from app.schemas.auth import (
     TokenResponse,
 )
 from app.security.passwords import hash_password, verify_password
-from app.security.mfa import generate_mfa_secret, generate_totp_uri, verify_totp_code
+from app.security.mfa import decrypt_mfa_secret, encrypt_mfa_secret, generate_mfa_secret, generate_totp_uri, verify_totp_code
 from app.security.tokens import (
     create_password_reset_token,
     revoke_all_user_sessions,
@@ -91,6 +97,19 @@ from app.services.risk_assessment import assess_transaction_risk
 
 app = FastAPI(title="FinGuard API")
 
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv("FINGUARD_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+)
+
 
 _METRICS_COUNTS: dict[tuple[str, str, int], int] = {}
 
@@ -101,6 +120,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
 
     # Use the route template (e.g. /accounts/{account_id}/balance), not the
     # raw URL, so every account UUID doesn't create a new metric series.
@@ -160,7 +181,12 @@ def readiness_check():
 # ============================================================
 
 @app.post("/users", response_model=UserResponse, status_code=201)
-def create_user(data: UserCreate):
+def create_user(
+    data: UserCreate,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     with SessionLocal() as db:
 
         user = User(
@@ -1047,29 +1073,6 @@ def register_user(payload: RegisterRequest):
     )
 
 
-def _legacy_register_unused(payload: RegisterRequest):
-    with SessionLocal() as session:
-        existing = session.scalar(
-            select(User).where(User.email == payload.email)
-        )
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Email already registered",
-            )
-
-        user = User(
-            email=payload.email,
-            full_name=payload.full_name,
-            password_hash=hash_password(payload.password),
-            role="CUSTOMER",
-        )
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        return user
-
-
 @app.post(
     "/auth/login",
     response_model=TokenResponse,
@@ -1173,7 +1176,11 @@ def login_user(
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
 )
-def refresh_access_token(request: Request, payload: RefreshRequest):
+def refresh_access_token(
+    request: Request,
+    payload: RefreshRequest,
+    _rate_limit: None = Depends(check_login_rate_limit),
+):
     with SessionLocal() as session:
         try:
             client_ip = request.client.host if request.client else None
@@ -1227,7 +1234,7 @@ def mfa_setup(current_user: User = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="User not found")
 
         secret = generate_mfa_secret()
-        user.mfa_secret = secret
+        user.mfa_secret = encrypt_mfa_secret(secret)
         session.commit()
 
         uri = generate_totp_uri(secret, user.email)
@@ -1247,7 +1254,7 @@ def mfa_enable(
         if user is None or not user.mfa_secret:
             raise HTTPException(status_code=400, detail="MFA setup has not been initiated")
 
-        if not verify_totp_code(user.mfa_secret, payload.code):
+        if not verify_totp_code(decrypt_mfa_secret(user.mfa_secret), payload.code):
             raise HTTPException(status_code=400, detail="Invalid verification code")
 
         user.mfa_enabled = True
@@ -1268,7 +1275,7 @@ def mfa_disable(
         if user is None or not user.mfa_enabled or not user.mfa_secret:
             raise HTTPException(status_code=400, detail="MFA is not enabled")
 
-        if not verify_totp_code(user.mfa_secret, payload.code):
+        if not verify_totp_code(decrypt_mfa_secret(user.mfa_secret), payload.code):
             raise HTTPException(status_code=400, detail="Invalid verification code")
 
         user.mfa_enabled = False
@@ -1285,6 +1292,7 @@ def mfa_disable(
 def mfa_login(
     request: Request,
     payload: MfaLoginRequest,
+    _rate_limit: None = Depends(check_login_rate_limit),
 ):
     try:
         user_id = verify_mfa_token(payload.mfa_token)
@@ -1299,7 +1307,7 @@ def mfa_login(
         if user is None or not user.mfa_enabled or not user.mfa_secret:
             raise HTTPException(status_code=400, detail="MFA not active for this account")
 
-        if not verify_totp_code(user.mfa_secret, payload.code):
+        if not verify_totp_code(decrypt_mfa_secret(user.mfa_secret), payload.code):
             raise HTTPException(status_code=401, detail="Invalid MFA code")
 
         token = create_access_token(user.id)
@@ -1369,9 +1377,12 @@ def forgot_password(
                 current_password_hash=user.password_hash,
             )
 
+        if reset_token:
+            logger.info("Password reset token generated for %s", payload.email)
+        expose_token = os.getenv("FINGUARD_EXPOSE_RESET_TOKEN") == "1"
         return ForgotPasswordResponse(
-            message="Si un compte correspond ? cet email, un jeton de r?initialisation a ?t? g?n?r?.",
-            reset_token=reset_token,
+            message="Si un compte correspond ? cet email, un lien de r?initialisation a ?t? envoy?.",
+            reset_token=reset_token if expose_token else None,
         )
 
 
