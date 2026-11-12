@@ -10,7 +10,7 @@ def _register_and_login(client, monkeypatch):
     password = "StrongPassword!123"
 
     reg = client.post(
-        "/auth/register",
+        "/admin/users",
         json={
             "email": email,
             "full_name": "Refresh Tester",

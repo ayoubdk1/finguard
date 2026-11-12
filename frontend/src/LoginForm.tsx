@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   confirmPasswordReset,
   loginUser,
-  registerUser,
   requestPasswordReset,
 } from './services/api'
 
@@ -10,12 +9,11 @@ interface LoginFormProps {
   onSuccess: () => void
 }
 
-type AuthMode = 'login' | 'register' | 'forgot' | 'reset'
+type AuthMode = 'login' | 'forgot' | 'reset'
 
 export function LoginForm({ onSuccess }: LoginFormProps) {
   const [mode, setMode] = useState<AuthMode>('login')
   const [email, setEmail] = useState('')
-  const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
   const [resetToken, setResetToken] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -36,11 +34,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
     setLoading(true)
 
     try {
-      if (mode === 'register') {
-        await registerUser(email, fullName, password)
-        await loginUser(email, password)
-        onSuccess()
-      } else if (mode === 'login') {
+      if (mode === 'login') {
         await loginUser(email, password)
         onSuccess()
       } else if (mode === 'forgot') {
@@ -70,17 +64,15 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   const getTitle = () => {
-    if (mode === 'register') return 'Cr?er un compte FinGuard'
     if (mode === 'forgot') return 'Mot de passe oubli?'
     if (mode === 'reset') return 'R?initialiser le mot de passe'
     return 'Connexion FinGuard'
   }
 
   const getSubtitle = () => {
-    if (mode === 'register') return 'Inscrivez-vous pour acc?der ? votre tableau de bord'
     if (mode === 'forgot') return 'Entrez votre adresse email pour recevoir un jeton de r?initialisation'
     if (mode === 'reset') return 'Choisissez votre nouveau mot de passe s?curis? (12 caract?res min.)'
-    return 'Entrez vos identifiants pour continuer'
+    return 'Acc?s priv? r?serv? aux utilisateurs autoris?s'
   }
 
   const inputStyle: React.CSSProperties = {
@@ -116,21 +108,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
       )}
 
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {mode === 'register' && (
-          <div>
-            <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Nom complet</label>
-            <input
-              type="text"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="ex. Alice Martin"
-              style={inputStyle}
-            />
-          </div>
-        )}
-
-        {(mode === 'login' || mode === 'register' || mode === 'forgot') && (
+        {(mode === 'login' || mode === 'forgot') && (
           <div>
             <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Adresse email</label>
             <input
@@ -144,19 +122,17 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
           </div>
         )}
 
-        {(mode === 'login' || mode === 'register') && (
+        {mode === 'login' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontSize: '13px', color: '#cbd5e1' }}>Mot de passe (12 caract?res min.)</label>
-              {mode === 'login' && (
-                <button
-                  type="button"
-                  onClick={() => switchMode('forgot')}
-                  style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', padding: 0 }}
-                >
-                  Mot de passe oubli? ?
-                </button>
-              )}
+              <label style={{ fontSize: '13px', color: '#cbd5e1' }}>Mot de passe</label>
+              <button
+                type="button"
+                onClick={() => switchMode('forgot')}
+                style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', padding: 0 }}
+              >
+                Mot de passe oubli? ?
+              </button>
             </div>
             <input
               type="password"
@@ -205,8 +181,6 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         >
           {loading
             ? 'Chargement...'
-            : mode === 'register'
-            ? "S'inscrire"
             : mode === 'forgot'
             ? 'Envoyer le lien de r?initialisation'
             : mode === 'reset'
@@ -215,31 +189,18 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         </button>
       </form>
 
-      <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#94a3b8' }}>
-        {mode === 'login' ? (
-          <>
-            Pas encore de compte ?{' '}
-            <button
-              type="button"
-              onClick={() => switchMode('register')}
-              style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
-            >
-              Cr?er un compte
-            </button>
-          </>
-        ) : (
-          <>
-            Retour ? la connexion ?{' '}
-            <button
-              type="button"
-              onClick={() => switchMode('login')}
-              style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
-            >
-              Se connecter
-            </button>
-          </>
-        )}
-      </div>
+      {mode !== 'login' && (
+        <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#94a3b8' }}>
+          Retour ? la connexion ?{' '}
+          <button
+            type="button"
+            onClick={() => switchMode('login')}
+            style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+          >
+            Se connecter
+          </button>
+        </div>
+      )}
     </div>
   )
 }

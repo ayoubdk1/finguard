@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Header
 from sqlalchemy import text, select, func
 from sqlalchemy.exc import IntegrityError
 
+from app.db.models import LoginHistory
 from app.db.models import (
     User,
     Account,
@@ -29,7 +30,12 @@ from sqlalchemy import select
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, has_permission
 from app.schemas.auth import (
+    AdminCreateUserRequest,
+    AdminResetPasswordRequest,
+    AdminUpdateUserRequest,
+    AdminUserResponse,
     ForgotPasswordRequest,
+    LoginHistoryItem,
     ForgotPasswordResponse,
     ResetPasswordRequest,
     LoginRequest,
@@ -1032,9 +1038,16 @@ def get_event_monitoring(
 @app.post(
     "/auth/register",
     response_model=RegisterResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_403_FORBIDDEN,
 )
 def register_user(payload: RegisterRequest):
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Public registration is disabled. Contact an administrator.",
+    )
+
+
+def _legacy_register_unused(payload: RegisterRequest):
     with SessionLocal() as session:
         existing = session.scalar(
             select(User).where(User.email == payload.email)
@@ -1067,6 +1080,9 @@ def login_user(
     payload: LoginRequest,
     _rate_limit: None = Depends(check_login_rate_limit),
 ):
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
     with SessionLocal() as session:
         user = session.scalar(
             select(User).where(User.email == payload.email)
@@ -1076,13 +1092,52 @@ def login_user(
             or not user.password_hash
             or not verify_password(payload.password, user.password_hash)
         ):
+            session.add(
+                LoginHistory(
+                    user_id=user.id if user else None,
+                    email=payload.email,
+                    ip_address=client_ip[:45] if client_ip else None,
+                    user_agent=user_agent[:255] if user_agent else None,
+                    success=False,
+                    failure_reason="Invalid credentials",
+                )
+            )
+            session.commit()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+        if getattr(user, "status", "ACTIVE") != "ACTIVE":
+            session.add(
+                LoginHistory(
+                    user_id=user.id,
+                    email=user.email,
+                    ip_address=client_ip[:45] if client_ip else None,
+                    user_agent=user_agent[:255] if user_agent else None,
+                    success=False,
+                    failure_reason=f"Account {user.status.lower()}",
+                )
+            )
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is not active. Contact an administrator.",
+            )
+
         if user.mfa_enabled:
+            session.add(
+                LoginHistory(
+                    user_id=user.id,
+                    email=user.email,
+                    ip_address=client_ip[:45] if client_ip else None,
+                    user_agent=user_agent[:255] if user_agent else None,
+                    success=True,
+                    failure_reason="MFA pending",
+                )
+            )
+            session.commit()
             mfa_tok = create_mfa_token(user.id)
             return TokenResponse(
                 access_token="",
@@ -1091,13 +1146,20 @@ def login_user(
             )
 
         token = create_access_token(user.id)
-        client_ip = request.client.host if request.client else None
-        user_agent = request.headers.get("user-agent")
         refresh_token, _ = issue_refresh_token(
             session,
             user.id,
             user_agent=user_agent,
             ip_address=client_ip,
+        )
+        session.add(
+            LoginHistory(
+                user_id=user.id,
+                email=user.email,
+                ip_address=client_ip[:45] if client_ip else None,
+                user_agent=user_agent[:255] if user_agent else None,
+                success=True,
+            )
         )
         session.commit()
         return TokenResponse(
@@ -1382,3 +1444,180 @@ def prometheus_metrics():
         content=body,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+# ============================================================
+# 10. ADMIN USER MANAGEMENT
+# ============================================================
+
+@app.get(
+    "/admin/users",
+    response_model=list[AdminUserResponse],
+    status_code=status.HTTP_200_OK,
+)
+def admin_list_users(current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        users = session.scalars(
+            select(User).order_by(User.created_at.desc())
+        ).all()
+        return users
+
+
+@app.post(
+    "/admin/users",
+    response_model=AdminUserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(User).where(User.email == payload.email)
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
+
+        user = User(
+            email=payload.email,
+            full_name=payload.full_name,
+            password_hash=hash_password(payload.password),
+            role=payload.role,
+            status=payload.status,
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+@app.patch(
+    "/admin/users/{user_id}",
+    response_model=AdminUserResponse,
+    status_code=status.HTTP_200_OK,
+)
+def admin_update_user(
+    user_id: UUID,
+    payload: AdminUpdateUserRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if payload.full_name is not None:
+            user.full_name = payload.full_name
+        if payload.role is not None:
+            user.role = payload.role
+        if payload.status is not None:
+            user.status = payload.status
+            if payload.status != "ACTIVE":
+                revoke_all_user_sessions(session, user.id)
+
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+@app.post(
+    "/admin/users/{user_id}/reset-password",
+    status_code=status.HTTP_200_OK,
+)
+def admin_reset_user_password(
+    user_id: UUID,
+    payload: AdminResetPasswordRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.password_hash = hash_password(payload.new_password)
+        revoke_all_user_sessions(session, user.id)
+        session.commit()
+        return {"status": "password_reset_by_admin"}
+
+
+@app.get(
+    "/admin/users/{user_id}/login-history",
+    response_model=list[LoginHistoryItem],
+    status_code=status.HTTP_200_OK,
+)
+def admin_get_login_history(
+    user_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        rows = session.scalars(
+            select(LoginHistory)
+            .where(LoginHistory.user_id == user_id)
+            .order_by(LoginHistory.created_at.desc())
+            .limit(50)
+        ).all()
+        return rows
+
+
+@app.get(
+    "/admin/users/{user_id}/sessions",
+    response_model=SessionListResponse,
+    status_code=status.HTTP_200_OK,
+)
+def admin_list_user_sessions(
+    user_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        active_tokens = get_active_sessions_for_user(session, user_id)
+        items = [SessionItem.model_validate(tok) for tok in active_tokens]
+        return SessionListResponse(sessions=items, total_active=len(items))
+
+
+@app.delete(
+    "/admin/users/{user_id}/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def admin_revoke_user_session(
+    user_id: UUID,
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as session:
+        revoked = revoke_session_by_id(session, session_id, user_id)
+        if not revoked:
+            raise HTTPException(status_code=404, detail="Session not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 
 import { LoginForm } from './LoginForm'
+import { UserManagement } from './UserManagement'
 import {
   getCurrentUser,
   logoutUser,
@@ -183,6 +184,7 @@ function App() {
     | 'Transactions'
     | 'Fraud Detection'
     | 'Event Monitoring'
+    | 'Users'
   >('Dashboard')
 
   // ============================================
@@ -873,7 +875,8 @@ function App() {
                 item.label === 'Transfers' ||
                 item.label === 'Transactions' ||
                 item.label === 'Fraud Detection' ||
-                item.label === 'Event Monitoring'
+                item.label === 'Event Monitoring' ||
+                (item.label === 'Users' && currentUser?.role === 'ADMIN')
 
               return (
                 <button
@@ -894,7 +897,8 @@ function App() {
                       item.label === 'Accounts' ||
                       item.label === 'Transactions' ||
                       item.label === 'Fraud Detection' ||
-                      item.label === 'Event Monitoring'
+                      item.label === 'Event Monitoring' ||
+                      item.label === 'Users'
                     ) {
                       setActivePage(item.label)
                     }
@@ -986,6 +990,8 @@ function App() {
                     ? 'FINANCIAL ACTIVITY'
                     : activePage === 'Fraud Detection'
                       ? 'FRAUD INTELLIGENCE'
+                      : activePage === 'Users'
+                      ? 'ADMINISTRATION'
                       : 'EVENT-DRIVEN ARCHITECTURE'}
             </p>
 
@@ -1000,6 +1006,8 @@ function App() {
                     ? 'Explore real transaction history across customer accounts.'
                     : activePage === 'Fraud Detection'
                       ? 'Analyze transaction risk using rules and machine learning.'
+                      : activePage === 'Users'
+                      ? 'Manage user accounts, statuses, login history, and active sessions.'
                       : 'Monitor transactional outbox events and consumer processing.'}
             </p>
           </div>
@@ -1663,6 +1671,8 @@ function App() {
         {/* ============================================ */}
         {/* FRAUD DETECTION PAGE */}
         {/* ============================================ */}
+
+        {activePage === 'Users' && currentUser?.role === 'ADMIN' && <UserManagement />}
 
         {activePage === 'Fraud Detection' && (
 

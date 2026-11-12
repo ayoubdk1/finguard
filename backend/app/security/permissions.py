@@ -19,6 +19,7 @@ class Permission(StrEnum):
     MONITORING_READ = "monitoring:read"
     FRAUD_ALERT_READ = "fraud_alert:read"
     FRAUD_ALERT_RESOLVE = "fraud_alert:resolve"
+    USER_MANAGE = "user:manage"
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {

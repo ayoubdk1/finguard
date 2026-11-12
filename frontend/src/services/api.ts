@@ -478,3 +478,127 @@ export async function confirmPasswordReset(
 
   return response.json() as Promise<{ status: string }>
 }
+
+
+export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'DISABLED'
+export type UserRole = 'CUSTOMER' | 'ADMIN' | 'FRAUD_ANALYST' | 'AUDITOR'
+
+export interface AdminUser {
+  id: string
+  email: string
+  full_name: string
+  role: UserRole | string
+  status: UserStatus | string
+  mfa_enabled: boolean
+  created_at: string
+}
+
+export interface LoginHistoryEntry {
+  id: string
+  user_id: string | null
+  email: string
+  ip_address: string | null
+  user_agent: string | null
+  success: boolean
+  failure_reason: string | null
+  created_at: string
+}
+
+export interface ActiveSessionItem {
+  id: string
+  family_id: string
+  user_agent: string | null
+  ip_address: string | null
+  created_at: string
+  expires_at: string
+}
+
+export interface ActiveSessionList {
+  sessions: ActiveSessionItem[]
+  total_active: number
+}
+
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? window.localStorage?.getItem('finguard_access_token') : null
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+async function handleAdminResponse<T>(response: Response, fallbackMsg: string): Promise<T> {
+  if (!response.ok) {
+    let message = fallbackMsg
+    try {
+      const err = await response.json()
+      if (err && typeof err.detail === 'string') {
+        message = err.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+  return response.json() as Promise<T>
+}
+
+export async function listAdminUsers(): Promise<AdminUser[]> {
+  const res = await fetch(`${API_BASE_URL}/admin/users`, { headers: authHeaders() })
+  return handleAdminResponse<AdminUser[]>(res, 'Failed to load users')
+}
+
+export async function createAdminUser(payload: {
+  email: string
+  full_name: string
+  password: string
+  role: UserRole
+  status: UserStatus
+}): Promise<AdminUser> {
+  const res = await fetch(`${API_BASE_URL}/admin/users`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  })
+  return handleAdminResponse<AdminUser>(res, 'Failed to create user')
+}
+
+export async function updateAdminUser(
+  userId: string,
+  payload: { full_name?: string; role?: UserRole; status?: UserStatus }
+): Promise<AdminUser> {
+  const res = await fetch(`${API_BASE_URL}/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  })
+  return handleAdminResponse<AdminUser>(res, 'Failed to update user')
+}
+
+export async function resetAdminUserPassword(userId: string, newPassword: string): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/reset-password`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  return handleAdminResponse<{ status: string }>(res, 'Failed to reset user password')
+}
+
+export async function getAdminUserLoginHistory(userId: string): Promise<LoginHistoryEntry[]> {
+  const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/login-history`, { headers: authHeaders() })
+  return handleAdminResponse<LoginHistoryEntry[]>(res, 'Failed to load login history')
+}
+
+export async function getAdminUserSessions(userId: string): Promise<ActiveSessionList> {
+  const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/sessions`, { headers: authHeaders() })
+  return handleAdminResponse<ActiveSessionList>(res, 'Failed to load active sessions')
+}
+
+export async function revokeAdminUserSession(userId: string, sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error('Failed to revoke session')
+  }
+}

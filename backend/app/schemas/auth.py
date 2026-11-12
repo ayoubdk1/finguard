@@ -63,6 +63,7 @@ class RegisterResponse(BaseModel):
     email: EmailStr
     full_name: str
     role: str
+    status: str = "ACTIVE"
     created_at: datetime
 
 
@@ -182,3 +183,87 @@ class ResetPasswordRequest(BaseModel):
 
     reset_token: str = Field(min_length=16, max_length=1024)
     new_password: str = Field(min_length=12, max_length=128)
+
+
+# ============================================
+# ADMIN USER MANAGEMENT
+# ============================================
+
+from typing import Literal
+
+
+class AdminCreateUserRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    full_name: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=12, max_length=128)
+    role: Literal["CUSTOMER", "ADMIN", "FRAUD_ANALYST", "AUDITOR"] = "CUSTOMER"
+    status: Literal["ACTIVE", "SUSPENDED", "DISABLED"] = "ACTIVE"
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return str(value).strip().lower()
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Full name cannot be empty")
+        return cleaned
+
+
+class AdminUpdateUserRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    role: Literal["CUSTOMER", "ADMIN", "FRAUD_ANALYST", "AUDITOR"] | None = None
+    status: Literal["ACTIVE", "SUSPENDED", "DISABLED"] | None = None
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Full name cannot be empty")
+        return cleaned
+
+
+class AdminResetPasswordRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class AdminUserResponse(BaseModel):
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email: EmailStr
+    full_name: str
+    role: str
+    status: str
+    mfa_enabled: bool
+    created_at: datetime
+
+
+class LoginHistoryItem(BaseModel):
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID | None = None
+    email: str
+    ip_address: str | None = None
+    user_agent: str | None = None
+    success: bool
+    failure_reason: str | None = None
+    created_at: datetime

@@ -12,7 +12,7 @@ def test_forgot_and_reset_password_flow():
 
     # 1. Register user
     reg = client.post(
-        "/auth/register",
+        "/admin/users",
         json={"email": email, "full_name": "Reset User", "password": old_password},
     )
     assert reg.status_code == 201

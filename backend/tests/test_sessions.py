@@ -6,12 +6,11 @@ client = TestClient(app)
 
 
 def _create_authenticated_user():
-    app.dependency_overrides.clear()
     email = f"session-user-{uuid.uuid4().hex[:8]}@example.com"
     password = "StrongPassword!123"
 
     reg = client.post(
-        "/auth/register",
+        "/admin/users",
         json={
             "email": email,
             "full_name": "Session Tester",
@@ -19,6 +18,7 @@ def _create_authenticated_user():
         },
     )
     assert reg.status_code == 201
+    app.dependency_overrides.clear()
 
     login = client.post(
         "/auth/login",

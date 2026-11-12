@@ -20,7 +20,7 @@ def test_register_and_login_success():
     password = "StrongPassword123!"
 
     reg = client.post(
-        "/auth/register",
+        "/admin/users",
         json={
             "email": email,
             "full_name": "Alice Martin",
@@ -57,17 +57,17 @@ def test_register_duplicate_email_returns_409():
         "password": "StrongPassword123!",
     }
 
-    first = client.post("/auth/register", json=payload)
+    first = client.post("/admin/users", json=payload)
     assert first.status_code == 201, first.text
 
-    second = client.post("/auth/register", json=payload)
+    second = client.post("/admin/users", json=payload)
     assert second.status_code == 409, second.text
 
 
 def test_login_wrong_password_returns_401():
     email = f"wrong-{uuid4().hex[:8]}@example.com"
     client.post(
-        "/auth/register",
+        "/admin/users",
         json={
             "email": email,
             "full_name": "Charlie Test",
@@ -108,10 +108,13 @@ def test_auth_me_requires_valid_token(real_auth):
     assert bad.status_code == 401, bad.text
 
     # 3. Valid token -> 200 with user profile
+    from app.security.dependencies import get_current_user
+    from tests.conftest import _default_test_admin
+    app.dependency_overrides[get_current_user] = _default_test_admin
     email = f"me-{uuid4().hex[:8]}@example.com"
     password = "StrongPassword123!"
     reg = client.post(
-        "/auth/register",
+        "/admin/users",
         json={
             "email": email,
             "full_name": "Diana Prince",
@@ -119,6 +122,7 @@ def test_auth_me_requires_valid_token(real_auth):
         },
     )
     assert reg.status_code == 201
+    app.dependency_overrides.clear()
 
     login = client.post(
         "/auth/login",
@@ -175,13 +179,16 @@ def test_protected_routes_require_token_and_enforce_ownership():
         assert client.get(f"/accounts/{uuid4()}/transactions").status_code == 401
         assert client.get("/monitoring/events").status_code == 401
 
-        # 2. Register User A and User B
+        # 2. Admin creates User A and User B
+        from app.security.dependencies import get_current_user
+        from tests.conftest import _default_test_admin
+        app.dependency_overrides[get_current_user] = _default_test_admin
         email_a = f"usera-{uuid4().hex[:8]}@example.com"
         email_b = f"userb-{uuid4().hex[:8]}@example.com"
         password = "StrongPassword123!"
 
         reg_a = client.post(
-            "/auth/register",
+            "/admin/users",
             json={"email": email_a, "full_name": "User A", "password": password},
         )
         user_a_id = reg_a.json()["id"]
@@ -190,13 +197,14 @@ def test_protected_routes_require_token_and_enforce_ownership():
         ).json()["access_token"]
 
         client.post(
-            "/auth/register",
+            "/admin/users",
             json={"email": email_b, "full_name": "User B", "password": password},
         )
         token_b = client.post(
             "/auth/login", json={"email": email_b, "password": password}
         ).json()["access_token"]
 
+        app.dependency_overrides.clear()
         # 3. User B cannot create an account for User A -> 403
         forbid_acc = client.post(
             "/accounts",
