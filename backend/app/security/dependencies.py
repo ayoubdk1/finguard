@@ -17,7 +17,7 @@ def is_demo_mode_allowed() -> bool:
         return False
     if os.getenv("FINGUARD_ENV", "development").lower() == "production":
         return False
-    return True
+    return os.getenv("FINGUARD_DEMO_MODE") == "1"
 
 
 def get_current_user(

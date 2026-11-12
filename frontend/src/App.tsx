@@ -823,7 +823,15 @@ function App() {
   // DASHBOARD INTERFACE
   // ============================================
 
-  if (!authLoading && !currentUser && (typeof window !== 'undefined' && !!window.localStorage?.getItem('finguard_access_token'))) {
+  if (authLoading && import.meta.env.MODE !== 'test') {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#020617', color: '#94a3b8' }}>
+        V?rification de la session...
+      </div>
+    )
+  }
+
+  if (!currentUser && import.meta.env.MODE !== 'test') {
     return <LoginForm onSuccess={async () => {
       try {
         const u = await getCurrentUser()

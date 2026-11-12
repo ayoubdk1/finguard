@@ -4,7 +4,6 @@ from app.main import app
 
 
 def test_forgot_and_reset_password_flow():
-    app.dependency_overrides.clear()
     client = TestClient(app)
 
     email = f"reset.{uuid.uuid4().hex[:8]}@example.com"
