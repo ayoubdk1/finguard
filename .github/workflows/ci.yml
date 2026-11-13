@@ -54,6 +54,9 @@ jobs:
       - name: Run pytest suite
         run: pytest -v
 
+      - name: Run ledger reconciliation check
+        run: python scripts/reconcile_ledger.py
+
   frontend-tests:
     runs-on: ubuntu-latest
     defaults:

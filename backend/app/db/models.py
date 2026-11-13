@@ -95,9 +95,20 @@ class Account(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_scope", "idempotency_key", name="uq_transactions_scope_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)  # rule I7
+    idempotency_key: Mapped[str] = mapped_column(String(100))  # rule I7
+    idempotency_scope: Mapped[str] = mapped_column(String(120), nullable=False, server_default="global", default="global")
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    original_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("transactions.id"),
+        nullable=True,
+        unique=True,
+    )
     description: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[TransactionStatus] = mapped_column(
         Enum(TransactionStatus, name="transaction_status"),

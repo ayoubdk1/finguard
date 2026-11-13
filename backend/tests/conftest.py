@@ -113,14 +113,14 @@ def client(session, monkeypatch):
         yield test_client
 
 
-from uuid import uuid4  # noqa: E402
+from uuid import UUID  # noqa: E402
 from app.main import app  # noqa: E402
 from app.security.dependencies import get_current_user  # noqa: E402
 
 
 def _default_test_admin() -> User:
     return User(
-        id=uuid4(),
+        id=UUID("00000000-0000-0000-0000-000000000001"),
         email="test-admin@finguard.local",
         full_name="Test Admin",
         role="ADMIN",

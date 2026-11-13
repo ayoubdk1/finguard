@@ -1,7 +1,10 @@
-import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from collections.abc import Callable
+import hashlib
+import json
+from typing import Any, Callable
+import uuid
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
@@ -16,25 +19,34 @@ from app.db.models import (
 
 
 class LedgerError(Exception):
-    """Base class for all ledger errors."""
+    """Base error for ledger posting failures."""
 
 
 class InvalidTransaction(LedgerError):
-    pass
+    """Raised when a transaction violates double-entry rules."""
 
 
 class AccountNotFound(LedgerError):
-    pass
+    """Raised when one or more accounts do not exist."""
 
 
 class InsufficientFunds(LedgerError):
-    pass
+    """Raised when a customer account would go below zero."""
+
+
+class IdempotencyConflict(LedgerError):
+    """Raised when an idempotency key is reused with a different request payload."""
 
 
 @dataclass(frozen=True)
 class EntryInput:
     account_id: uuid.UUID
-    amount: int  # cents; negative = debit, positive = credit
+    amount: int  # signed cents; negative = debit, positive = credit
+
+
+def compute_request_hash(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def get_balance(session: Session, account_id: uuid.UUID) -> int:
@@ -46,8 +58,13 @@ def get_balance(session: Session, account_id: uuid.UUID) -> int:
     )
 
 
-def _find_by_key(session: Session, key: str) -> Transaction | None:
-    return session.scalar(select(Transaction).where(Transaction.idempotency_key == key))
+def _find_by_key(session: Session, key: str, scope: str = "global") -> Transaction | None:
+    return session.scalar(
+        select(Transaction).where(
+            Transaction.idempotency_scope == scope,
+            Transaction.idempotency_key == key,
+        )
+    )
 
 
 def post_transaction(
@@ -56,64 +73,78 @@ def post_transaction(
     entries: list[EntryInput],
     description: str = "",
     before_commit: Callable[[Session, Transaction], None] | None = None,
+    *,
+    idempotency_scope: str = "global",
+    request_hash: str | None = None,
+    original_transaction_id: uuid.UUID | None = None,
+    commit: bool = True,
 ) -> Transaction:
     # 1. Validate the request itself (R1, R3, I1, I9)
     if not idempotency_key:
         raise InvalidTransaction("idempotency key is required")
     if len(entries) < 2:
         raise InvalidTransaction("a transaction needs at least 2 entries")
+
     for e in entries:
         if not isinstance(e.amount, int) or isinstance(e.amount, bool):
             raise InvalidTransaction("amounts must be integers in cents")
         if e.amount == 0:
             raise InvalidTransaction("amounts must be non-zero")
+
     if sum(e.amount for e in entries) != 0:
         raise InvalidTransaction("transaction is not balanced")
 
-    # 2. Idempotency (I7): same key returns the original transaction
-    existing = _find_by_key(session, idempotency_key)
+    # 2. Idempotency (I7): same (scope, key) returns the original transaction or raises on hash mismatch
+    existing = _find_by_key(session, idempotency_key, scope=idempotency_scope)
     if existing is not None:
+        if request_hash is not None and existing.request_hash is not None and existing.request_hash != request_hash:
+            raise IdempotencyConflict("Idempotency key used for different request payload")
         return existing
 
-    # 3. Lock the accounts in a fixed order to avoid deadlocks
+    # 3. Lock the accounts in a fixed UUID order to avoid deadlocks
     account_ids = sorted({e.account_id for e in entries})
     accounts = session.scalars(
         select(Account).where(Account.id.in_(account_ids)).order_by(Account.id).with_for_update()
     ).all()
+
     if len(accounts) != len(account_ids):
-        session.rollback()
+        if commit:
+            session.rollback()
         raise AccountNotFound("one or more accounts do not exist")
+
     by_id = {a.id: a for a in accounts}
 
     # 4. One currency per transaction (I2)
     if len({a.currency for a in accounts}) != 1:
-        session.rollback()
+        if commit:
+            session.rollback()
         raise InvalidTransaction("transaction mixes currencies")
 
     # 5. No overdraft on customer accounts (I5)
     deltas: dict[uuid.UUID, int] = defaultdict(int)
     for e in entries:
         deltas[e.account_id] += e.amount
+
     for acct in accounts:
         if acct.account_type == AccountType.CUSTOMER and deltas[acct.id] < 0:
             if get_balance(session, acct.id) + deltas[acct.id] < 0:
-                session.rollback()
+                if commit:
+                    session.rollback()
                 raise InsufficientFunds(f"insufficient funds in account {acct.id}")
-
 
     # 6. Write ledger entries and outbox event atomically (I6)
     tx = Transaction(
         idempotency_key=idempotency_key,
+        idempotency_scope=idempotency_scope,
+        request_hash=request_hash,
+        original_transaction_id=original_transaction_id,
         description=description,
         status=TransactionStatus.POSTED,
     )
 
     try:
-        # Create the transaction
         session.add(tx)
         session.flush()
-
-        # Create ledger entries
         for e in entries:
             session.add(
                 LedgerEntry(
@@ -123,34 +154,27 @@ def post_transaction(
                     currency=by_id[e.account_id].currency,
                 )
             )
-
-        # Write ledger entries before the callback
         session.flush()
-
-        # Create outbox event in the SAME database session
         if before_commit is not None:
             before_commit(session, tx)
-
-        # Commit ledger + outbox together
-        session.commit()
-
+        if commit:
+            session.commit()
     except IntegrityError as exc:
-        session.rollback()
-
-        # Concurrent requests with the same key:
-        # return the transaction that was committed first
-        winner = _find_by_key(session, idempotency_key)
-        if winner is not None:
-            return winner
-
+        if commit:
+            session.rollback()
+            winner = _find_by_key(session, idempotency_key, scope=idempotency_scope)
+            if winner is not None:
+                if request_hash is not None and winner.request_hash is not None and winner.request_hash != request_hash:
+                    raise IdempotencyConflict("Idempotency key used for different request payload") from exc
+                return winner
         raise LedgerError(str(exc.orig)) from exc
-
     except DBAPIError as exc:
-        session.rollback()
+        if commit:
+            session.rollback()
         raise LedgerError(str(exc.orig)) from exc
-
     except Exception:
-        session.rollback()
+        if commit:
+            session.rollback()
         raise
 
     return tx

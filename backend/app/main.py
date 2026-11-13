@@ -1,3 +1,4 @@
+from app.services.ledger import IdempotencyConflict, compute_request_hash
 import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.logging import configure_json_logging
@@ -346,10 +347,18 @@ def create_deposit(
 
         # 4. Post balanced ledger entries
         # Deposits do NOT create TransferPosted events
+        dep_scope = f"{current_user.id}:POST:/deposits"
+        dep_hash = compute_request_hash({
+            "account_id": str(data.account_id),
+            "amount_cents": data.amount_cents,
+            "description": data.description,
+        })
         try:
             tx = post_transaction(
                 session=db,
                 idempotency_key=idempotency_key,
+                idempotency_scope=dep_scope,
+                request_hash=dep_hash,
                 entries=[
                     EntryInput(
                         funding.id,
@@ -362,6 +371,8 @@ def create_deposit(
                 ],
                 description=data.description,
             )
+        except IdempotencyConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
         except AccountNotFound as exc:
             raise HTTPException(
@@ -452,17 +463,17 @@ def create_transfer(
                 detail="Cannot transfer to the same account",
             )
 
-        # 2. Find both accounts with pessimistic row lock on source account (race condition protection)
-        source = db.scalar(
+        # 2. Lock both accounts once in deterministic UUID order (deadlock-free)
+        ordered_ids = sorted([data.source_account_id, data.destination_account_id])
+        locked_accounts = db.scalars(
             select(Account)
-            .where(Account.id == data.source_account_id)
+            .where(Account.id.in_(ordered_ids))
+            .order_by(Account.id)
             .with_for_update()
-        )
-
-        destination = db.get(
-            Account,
-            data.destination_account_id,
-        )
+        ).all()
+        acct_map = {a.id: a for a in locked_accounts}
+        source = acct_map.get(data.source_account_id)
+        destination = acct_map.get(data.destination_account_id)
 
         if source is None or destination is None:
             raise HTTPException(
@@ -470,7 +481,7 @@ def create_transfer(
                 detail="Account not found",
             )
 
-        # 3. Only CUSTOMER accounts
+        # 3. Ensure both accounts are customer accounts
         if (
             source.account_type != AccountType.CUSTOMER
             or destination.account_type != AccountType.CUSTOMER
@@ -480,26 +491,35 @@ def create_transfer(
                 detail="Transfers require customer accounts",
             )
 
-        # 4b. Enforce per-transaction and rolling 24-hour limits
+        # 4b. Enforce currency-aware per-transaction and rolling 24-hour limits
         try:
-            check_transfer_limits(db, source.id, data.amount_cents)
+            check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
         except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
             raise HTTPException(
                 status_code=422,
                 detail=str(exc),
             )
 
-        # 5. Post ledger transaction: Same-Currency vs Cross-Currency FX
+        # 5. Post ledger transaction: Same-Currency vs Atomic Cross-Currency FX
         is_fx = source.currency != destination.currency
         converted_amount_cents = None
         fee_cents = None
         effective_rate = None
+        tx_scope = f"{current_user.id}:POST:/transfers"
+        tx_hash = compute_request_hash({
+            "source_account_id": str(data.source_account_id),
+            "destination_account_id": str(data.destination_account_id),
+            "amount_cents": data.amount_cents,
+            "description": data.description,
+        })
 
         try:
             if not is_fx:
                 tx = post_transaction(
                     session=db,
                     idempotency_key=idempotency_key,
+                    idempotency_scope=tx_scope,
+                    request_hash=tx_hash,
                     entries=[
                         EntryInput(source.id, -data.amount_cents),
                         EntryInput(destination.id, data.amount_cents),
@@ -537,27 +557,44 @@ def create_transfer(
                 if sys_fx_src is None or sys_fx_dst is None:
                     raise HTTPException(status_code=500, detail="SYSTEM_FX clearing account not configured")
 
-                # Post source currency debit/credit to SYSTEM_FX
                 tx = post_transaction(
                     session=db,
                     idempotency_key=idempotency_key,
+                    idempotency_scope=tx_scope,
+                    request_hash=tx_hash,
                     entries=[
                         EntryInput(source.id, -data.amount_cents),
                         EntryInput(sys_fx_src.id, data.amount_cents),
                     ],
                     description=data.description,
+                    before_commit=lambda session, tx: enqueue_transfer_posted(
+                        session=session,
+                        transaction_id=tx.id,
+                        source_account_id=source.id,
+                        destination_account_id=destination.id,
+                        amount_cents=data.amount_cents,
+                        currency=source.currency,
+                    ),
+                    commit=False,
                 )
 
-                # Post target currency delivery to destination
                 post_transaction(
                     session=db,
                     idempotency_key=f"{idempotency_key}:fx_delivery",
+                    idempotency_scope=f"{tx_scope}:fx_delivery",
+                    request_hash=tx_hash,
                     entries=[
                         EntryInput(sys_fx_dst.id, -converted_amount_cents),
                         EntryInput(destination.id, converted_amount_cents),
                     ],
                     description=f"FX from {source.id} ({source.currency}->{destination.currency})",
+                    commit=False,
                 )
+                db.commit()
+
+        except IdempotencyConflict as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(exc))
 
         except InsufficientFunds as exc:
             raise HTTPException(
@@ -710,33 +747,99 @@ def refund_transfer(
         # User must own original source account (or be ADMIN)
         ensure_user_owns_account_id(orig_source_id, current_user, require_write=True)
 
-        # Check for duplicate refund
+        refund_scope = f"{current_user.id}:POST:/transfers/{transfer_id}/refund"
+        refund_hash = compute_request_hash({"transfer_id": str(transfer_id)})
+
+        replay_tx = db.scalar(
+            select(Transaction).where(
+                Transaction.idempotency_scope == refund_scope,
+                Transaction.idempotency_key == idempotency_key,
+            )
+        )
+        if replay_tx is not None:
+            if replay_tx.request_hash is not None and replay_tx.request_hash != refund_hash:
+                raise HTTPException(status_code=409, detail="Idempotency key used for different refund")
+            return TransferResponse(
+                transaction_id=str(replay_tx.id),
+                status=replay_tx.status.value,
+                amount_cents=transfer_amount,
+                source_account_id=str(orig_dest_id),
+                destination_account_id=str(orig_source_id),
+                created_at=replay_tx.created_at.isoformat(),
+            )
+
         existing_refund = db.scalar(
             select(Transaction).where(
-                Transaction.description == f"Refund of {original_tx.id}",
-                Transaction.status == TransactionStatus.POSTED,
+                Transaction.original_transaction_id == original_tx.id,
             )
         )
         if existing_refund:
             raise HTTPException(status_code=409, detail="Transaction has already been refunded")
 
-        # Mirror entry: Debit original destination, Credit original source
-        try:
-            refund_tx = post_transaction(
-                session=db,
-                idempotency_key=idempotency_key,
-                entries=[
-                    EntryInput(orig_dest_id, -transfer_amount),
-                    EntryInput(orig_source_id, transfer_amount),
-                ],
-                description=f"Refund of {original_tx.id}",
+        fx_leg = db.scalar(
+            select(Transaction).where(
+                Transaction.idempotency_scope == f"{original_tx.idempotency_scope}:fx_delivery",
+                Transaction.idempotency_key == f"{original_tx.idempotency_key}:fx_delivery",
             )
+        )
+
+        try:
+            if fx_leg is None:
+                refund_tx = post_transaction(
+                    session=db,
+                    idempotency_key=idempotency_key,
+                    idempotency_scope=refund_scope,
+                    request_hash=refund_hash,
+                    original_transaction_id=original_tx.id,
+                    entries=[
+                        EntryInput(orig_dest_id, -transfer_amount),
+                        EntryInput(orig_source_id, transfer_amount),
+                    ],
+                    description=f"Refund of {original_tx.id}",
+                )
+            else:
+                fx_entries = sorted(fx_leg.entries, key=lambda e: e.amount)
+                fx_sys_dst_id = fx_entries[0].account_id
+                fx_customer_dst_id = fx_entries[1].account_id
+                fx_delivered_amount = fx_entries[1].amount
+
+                refund_tx = post_transaction(
+                    session=db,
+                    idempotency_key=idempotency_key,
+                    idempotency_scope=refund_scope,
+                    request_hash=refund_hash,
+                    original_transaction_id=original_tx.id,
+                    entries=[
+                        EntryInput(orig_dest_id, -transfer_amount),
+                        EntryInput(orig_source_id, transfer_amount),
+                    ],
+                    description=f"Refund of {original_tx.id}",
+                    commit=False,
+                )
+                post_transaction(
+                    session=db,
+                    idempotency_key=f"{idempotency_key}:fx_refund",
+                    idempotency_scope=f"{refund_scope}:fx_refund",
+                    request_hash=refund_hash,
+                    entries=[
+                        EntryInput(fx_customer_dst_id, -fx_delivered_amount),
+                        EntryInput(fx_sys_dst_id, fx_delivered_amount),
+                    ],
+                    description=f"FX Refund of {original_tx.id}",
+                    commit=False,
+                )
+                db.commit()
+        except IdempotencyConflict as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(exc))
         except InsufficientFunds as exc:
+            db.rollback()
             raise HTTPException(
                 status_code=409,
                 detail=f"Refund failed: recipient has insufficient funds ({exc})",
             )
         except Exception as exc:
+            db.rollback()
             raise HTTPException(status_code=400, detail=str(exc))
 
         return TransferResponse(
