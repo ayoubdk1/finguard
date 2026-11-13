@@ -52,6 +52,7 @@ const menuItems = [
   { icon: '≡', label: 'Transactions' },
   { icon: '◇', label: 'Fraud Detection' },
   { icon: '◉', label: 'Event Monitoring' },
+  { icon: '\u25ce', label: 'Users' },
 ]
 
 type AccountMovement = TransactionHistoryItem & {
@@ -930,7 +931,7 @@ function App() {
                 onClick={handleLogout}
                 style={{ marginTop: '8px', width: '100%', padding: '6px', background: '#334155', border: 'none', borderRadius: '4px', color: '#cbd5e1', fontSize: '12px', cursor: 'pointer' }}
               >
-                Se d?connecter
+                Se déconnecter
               </button>
             </div>
           ) : (
@@ -965,7 +966,7 @@ function App() {
           <div className="topbar-right">
 
             <span className="demo-badge">
-              ● DEMO MODE
+              {currentUser ? `\u25cf ${currentUser.role}` : '\u25cf PRIVATE'}
             </span>
 
             <div className="avatar">FG</div>

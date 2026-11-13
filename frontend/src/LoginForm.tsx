@@ -50,7 +50,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         setNewPassword('')
         setResetToken('')
         setMode('login')
-        setInfoMessage('Votre mot de passe a ?t? r?initialis? avec succ?s. Vous pouvez maintenant vous connecter.')
+        setInfoMessage('Votre mot de passe a ?t? réinitialisé avec succès. Vous pouvez maintenant vous connecter.')
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -64,15 +64,15 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   const getTitle = () => {
-    if (mode === 'forgot') return 'Mot de passe oubli?'
-    if (mode === 'reset') return 'R?initialiser le mot de passe'
+    if (mode === 'forgot') return 'Mot de passe oublié'
+    if (mode === 'reset') return 'Réinitialiser le mot de passe'
     return 'Connexion FinGuard'
   }
 
   const getSubtitle = () => {
-    if (mode === 'forgot') return 'Entrez votre adresse email pour recevoir un jeton de r?initialisation'
-    if (mode === 'reset') return 'Choisissez votre nouveau mot de passe s?curis? (12 caract?res min.)'
-    return 'Acc?s priv? r?serv? aux utilisateurs autoris?s'
+    if (mode === 'forgot') return 'Entrez votre adresse email pour recevoir un jeton de réinitialisation'
+    if (mode === 'reset') return 'Choisissez votre nouveau mot de passe sécurisé (12 caractères min.)'
+    return 'Accès privé réservé aux utilisateurs autorisés'
   }
 
   const inputStyle: React.CSSProperties = {
@@ -131,7 +131,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
                 onClick={() => switchMode('forgot')}
                 style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', padding: 0 }}
               >
-                Mot de passe oubli? ?
+                Mot de passe oublié ?
               </button>
             </div>
             <input
@@ -148,19 +148,19 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         {mode === 'reset' && (
           <>
             <div>
-              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Jeton de r?initialisation</label>
+              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Jeton de réinitialisation</label>
               <input
                 type="text"
                 required
                 value={resetToken}
                 onChange={(e) => setResetToken(e.target.value)}
-                placeholder="Collez votre jeton de r?initialisation"
+                placeholder="Collez votre jeton de réinitialisation"
                 style={inputStyle}
               />
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Nouveau mot de passe (12 caract?res min.)</label>
+              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Nouveau mot de passe (12 caractères min.)</label>
               <input
                 type="password"
                 required
@@ -182,16 +182,16 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
           {loading
             ? 'Chargement...'
             : mode === 'forgot'
-            ? 'Envoyer le lien de r?initialisation'
+            ? 'Envoyer le lien de réinitialisation'
             : mode === 'reset'
-            ? 'Mettre ? jour le mot de passe'
+            ? 'Mettre à jour le mot de passe'
             : 'Se connecter'}
         </button>
       </form>
 
       {mode !== 'login' && (
         <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#94a3b8' }}>
-          Retour ? la connexion ?{' '}
+          Retour à la connexion ?{' '}
           <button
             type="button"
             onClick={() => switchMode('login')}
