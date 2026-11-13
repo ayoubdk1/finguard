@@ -87,3 +87,11 @@ transactions were incorrectly classified as fraud.
 https://scikit-learn.org/stable/modules/model_evaluation.html
 
 https://scikit-learn.org/stable/common_pitfalls.html
+
+
+## Evaluation Caveats & Cross-Validation
+
+- **Synthetic Dataset Limitation**: The dataset (`backend/data/synthetic_transactions.csv`) contains 1,000 synthetic rows (101 fraud cases). The held-out test split has only **150 rows and 15 fraud cases**, so single-split metrics have high variance.
+- **Label-Rule Correlation**: Because the synthetic generator shares thresholds with the rule engine (`risk.py`), the Gradient Boosting model partly learns the generator's rule boundary rather than independent real-world fraud patterns.
+- **5-Fold Stratified Cross-Validation**: Mean Average Precision = **0.785** (95% CI: **[0.712, 0.858]**).
+- **Graceful Fallback**: In production, if `fraud_gradient_boosting.joblib` is missing or fails to load, `predict_ml_risk` falls back cleanly to rule-based scoring (`ml_available: false`) without returning HTTP 500.

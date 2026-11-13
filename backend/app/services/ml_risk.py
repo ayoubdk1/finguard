@@ -1,13 +1,13 @@
-
 from functools import lru_cache
+import json
 from pathlib import Path
 
 import joblib
 import pandas as pd
 
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-MODEL_FILE = BASE_DIR / "models" / "fraud_gradient_boosting.joblib"
+MODEL_FILE = Path(__file__).resolve().parents[2] / "models" / "fraud_gradient_boosting.joblib"
+META_FILE = Path(__file__).resolve().parents[2] / "models" / "fraud_gradient_boosting.meta.json"
 
 FEATURES = [
     "amount_cents",
@@ -19,12 +19,19 @@ FEATURES = [
 
 @lru_cache(maxsize=1)
 def load_fraud_model():
-    if not MODEL_FILE.is_file():
-        raise FileNotFoundError(
-            f"Fraud model not found: {MODEL_FILE}"
-        )
-
+    if not MODEL_FILE.exists():
+        raise FileNotFoundError(f"Saved fraud model not found: {MODEL_FILE}")
     return joblib.load(MODEL_FILE)
+
+
+@lru_cache(maxsize=1)
+def load_model_metadata() -> dict:
+    if META_FILE.exists():
+        try:
+            return json.loads(META_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
 
 
 def predict_ml_risk(
@@ -33,34 +40,45 @@ def predict_ml_risk(
     account_age_minutes: int,
     failed_transfers_last_hour: int,
 ) -> dict:
+    meta = load_model_metadata()
+    model_version = meta.get("version", "unversioned")
 
-    values = [
-        amount_cents,
-        transfers_last_10min,
-        account_age_minutes,
-        failed_transfers_last_hour,
-    ]
+    try:
+        model = load_fraud_model()
+        row = pd.DataFrame(
+            [
+                {
+                    "amount_cents": amount_cents,
+                    "transfers_last_10min": transfers_last_10min,
+                    "account_age_minutes": account_age_minutes,
+                    "failed_transfers_last_hour": failed_transfers_last_hour,
+                }
+            ]
+        )
+        pred = int(model.predict(row)[0])
+        prob = float(model.predict_proba(row)[0][1])
 
-    if any(type(value) is not int or value < 0 for value in values):
-        raise ValueError("Inputs must be non-negative integers")
+        contributions: dict[str, float] = {}
+        importances = getattr(model, "feature_importances_", None)
+        if importances is not None and len(importances) == len(FEATURES):
+            contributions = {
+                feat: round(float(imp), 4)
+                for feat, imp in zip(FEATURES, importances)
+            }
 
-    if amount_cents == 0:
-        raise ValueError("Amount must be positive")
-
-    transaction = pd.DataFrame(
-        [values],
-        columns=FEATURES
-    )
-
-    model = load_fraud_model()
-
-    prediction = int(model.predict(transaction)[0])
-    probability = float(
-        model.predict_proba(transaction)[0][1]
-    )
-
-    return {
-        "ml_prediction": "FRAUD" if prediction == 1 else "NORMAL",
-        "fraud_probability": round(probability, 4),
-        "model": "GradientBoostingClassifier",
-    }
+        return {
+            "ml_available": True,
+            "model_version": model_version,
+            "ml_prediction": "FRAUD" if pred == 1 else "NORMAL",
+            "ml_probability": round(prob, 4),
+            "feature_contributions": contributions,
+        }
+    except (FileNotFoundError, ImportError, OSError, Exception) as exc:
+        return {
+            "ml_available": False,
+            "model_version": model_version,
+            "ml_prediction": "UNAVAILABLE",
+            "ml_probability": None,
+            "feature_contributions": {},
+            "fallback_reason": str(exc),
+        }

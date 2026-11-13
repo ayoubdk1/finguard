@@ -1,3 +1,4 @@
+from datetime import timedelta
 from app.services.ledger import IdempotencyConflict, compute_request_hash
 import logging
 from fastapi.middleware.cors import CORSMiddleware
@@ -657,6 +658,66 @@ def create_transfer(
                 detail="Idempotency key used for different transaction",
             )
 
+        # 6b. Server-side fraud risk assessment & automatic FraudAlert creation
+        now_utc = datetime.now(timezone.utc)
+        ten_min_ago = now_utc - timedelta(minutes=10)
+        one_hour_ago = now_utc - timedelta(hours=1)
+        transfers_10m = int(
+            db.scalar(
+                select(func.count())
+                .select_from(LedgerEntry)
+                .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+                .where(
+                    LedgerEntry.account_id == source.id,
+                    LedgerEntry.amount < 0,
+                    Transaction.created_at >= ten_min_ago,
+                )
+            )
+            or 0
+        )
+        src_created = source.created_at
+        if src_created.tzinfo is None:
+            src_created = src_created.replace(tzinfo=timezone.utc)
+        account_age_min = max(0, int((now_utc - src_created).total_seconds() // 60))
+        failed_1h = int(
+            db.scalar(
+                select(func.count())
+                .select_from(LedgerEntry)
+                .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+                .where(
+                    LedgerEntry.account_id == source.id,
+                    Transaction.status == TransactionStatus.FAILED,
+                    Transaction.created_at >= one_hour_ago,
+                )
+            )
+            or 0
+        )
+        risk = assess_transaction_risk(
+            amount_cents=data.amount_cents,
+            transfers_last_10min=transfers_10m,
+            account_age_minutes=account_age_min,
+            failed_transfers_last_hour=failed_1h,
+        )
+        if risk.get("review_recommended"):
+            existing_alert = db.scalar(
+                select(FraudAlert).where(FraudAlert.transaction_id == tx.id)
+            )
+            if existing_alert is None:
+                raw_score = risk.get("ml_probability")
+                if raw_score is None:
+                    raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
+                reasons = risk.get("reason_codes") or ["ML_ANOMALY"]
+                db.add(
+                    FraudAlert(
+                        transaction_id=tx.id,
+                        account_id=source.id,
+                        risk_score=int(round(float(raw_score) * 1000)),
+                        reasons=reasons,
+                        status=FraudAlertStatus.PENDING.value,
+                    )
+                )
+                db.commit()
+
         # 7. Return result
         return {
             "transaction_id": tx.id,
@@ -1001,6 +1062,12 @@ def start_investigation(
         if alert is None:
             raise HTTPException(status_code=404, detail="Fraud alert not found")
 
+        current_status = alert.status.value if hasattr(alert.status, "value") else str(alert.status)
+        if current_status != FraudAlertStatus.PENDING.value:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invalid alert state transition from {current_status} to INVESTIGATING",
+            )
         alert.status = FraudAlertStatus.INVESTIGATING.value
         alert.analyst_id = current_user.id
         db.commit()
@@ -1033,10 +1100,25 @@ def resolve_alert(
         if alert is None:
             raise HTTPException(status_code=404, detail="Fraud alert not found")
 
+        current_status = alert.status.value if hasattr(alert.status, "value") else str(alert.status)
+        if current_status not in (FraudAlertStatus.PENDING.value, FraudAlertStatus.INVESTIGATING.value):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invalid alert state transition from {current_status} to {payload.decision}",
+            )
         alert.status = payload.decision
         alert.analyst_id = current_user.id
         alert.analyst_notes = payload.analyst_notes
         alert.resolved_at = datetime.now(timezone.utc)
+
+        if payload.decision == FraudAlertStatus.BLOCKED.value:
+            flagged_account = db.get(Account, alert.account_id)
+            if flagged_account is not None and flagged_account.user_id is not None:
+                owner = db.get(User, flagged_account.user_id)
+                if owner is not None:
+                    owner.status = "SUSPENDED"
+                    revoke_all_user_sessions(db, owner.id)
+
         db.commit()
         db.refresh(alert)
         return FraudAlertResponse(

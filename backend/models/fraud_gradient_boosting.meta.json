@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "algorithm": "GradientBoostingClassifier",
+  "trained_at": "2026-11-13T22:00:00Z",
+  "dataset_path": "backend/data/synthetic_transactions.csv",
+  "dataset_sha256": "f2965c927412f973ac465bf38d1d2db623b923b548e712cf7eb78e68d4ca9781",
+  "dataset_rows": 1000,
+  "dataset_fraud_cases": 101,
+  "test_rows": 150,
+  "test_fraud_cases": 15,
+  "cv_5fold_ap_mean": 0.785,
+  "cv_5fold_ap_ci95": [
+    0.712,
+    0.858
+  ],
+  "test_metrics": {
+    "precision": 0.6111,
+    "recall": 0.7333,
+    "f1": 0.6667,
+    "average_precision": 0.8276,
+    "accuracy": 0.9267
+  },
+  "caveat": "Trained on synthetic data where labels correlate with rule-based thresholds; evaluate on real labeled production data before autonomous blocking."
+}
