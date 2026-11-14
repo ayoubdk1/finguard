@@ -1,35 +1,23 @@
 services:
-
-  # ====================================
-  # PostgreSQL Database
-  # ====================================
   db:
     image: postgres:16
     container_name: finguard-db
-
     environment:
       POSTGRES_USER: finguard
-      POSTGRES_PASSWORD: finguard
+      POSTGRES_PASSWORD: finguard_dev_password
       POSTGRES_DB: finguard
-
     ports:
-      - "5432:5432"
-
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U finguard"]
       interval: 5s
       retries: 10
 
-  # ====================================
-  # Redpanda Event Streaming
-  # ====================================
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v26.2.6
     container_name: finguard-redpanda
-
     command:
       - redpanda
       - start
@@ -45,16 +33,11 @@ services:
       - dev-container
       - --smp
       - "1"
-
     ports:
       - "127.0.0.1:19092:19092"
-
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
-  # ====================================
-  # Redis (Distributed Rate Limiting)
-  # ====================================
   redis:
     image: redis:7-alpine
     container_name: finguard-redis
@@ -66,9 +49,78 @@ services:
       timeout: 3s
       retries: 5
 
-# ====================================
-# Persistent Docker Volumes
-# ====================================
+  backend:
+    build:
+      context: ./backend
+    container_name: finguard-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://finguard:finguard_dev_password@db:5432/finguard
+      FINGUARD_JWT_SECRET: ${FINGUARD_JWT_SECRET:-change-me-in-production-at-least-32-chars}
+      FINGUARD_REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      FINGUARD_CORS_ORIGINS: http://localhost:8080,http://localhost:5173
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8001:8000"
+
+  outbox-publisher:
+    build:
+      context: ./backend
+    container_name: finguard-outbox-publisher
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://finguard:finguard_dev_password@db:5432/finguard
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      FINGUARD_OUTBOX_MAX_ATTEMPTS: "5"
+      FINGUARD_OUTBOX_POLL_SECONDS: "2.0"
+    command: ["python", "-m", "app.workers.outbox_publisher"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: finguard-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: finguard-prometheus
+    depends_on:
+      - backend
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: finguard-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
 volumes:
   pgdata:
   redpanda_data:
+  grafana_data:

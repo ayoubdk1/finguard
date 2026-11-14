@@ -1,3 +1,4 @@
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -45,6 +46,12 @@ class CircuitBreaker:
                 self._state = CircuitState.HALF_OPEN
             return self._state
 
+    def reset(self) -> None:
+        with self._lock:
+            self._failure_count = 0
+            self._state = CircuitState.CLOSED
+            self._opened_at = None
+
     def call(self, fn: Callable[..., T], *args, **kwargs) -> T:
         current_state = self.state
         if current_state == CircuitState.OPEN:
@@ -82,10 +89,14 @@ def calculate_backoff_delay(
     attempt: int,
     base_delay_seconds: float = 0.5,
     max_delay_seconds: float = 60.0,
+    jitter_ratio: float = 0.0,
+    rng: Callable[[], float] = random.random,
 ) -> float:
     if attempt <= 0:
         return 0.0
     delay = base_delay_seconds * (2 ** (attempt - 1))
+    if jitter_ratio > 0.0:
+        delay = delay * (1.0 + rng() * jitter_ratio)
     return min(max_delay_seconds, delay)
 
 
@@ -95,6 +106,8 @@ def retry_with_backoff(
     max_attempts: int = 3,
     base_delay_seconds: float = 0.1,
     max_delay_seconds: float = 5.0,
+    jitter_ratio: float = 0.0,
+    rng: Callable[[], float] = random.random,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> T:
     last_exc: Exception | None = None
@@ -109,6 +122,8 @@ def retry_with_backoff(
                 attempt,
                 base_delay_seconds=base_delay_seconds,
                 max_delay_seconds=max_delay_seconds,
+                jitter_ratio=jitter_ratio,
+                rng=rng,
             )
             sleep_fn(delay)
     assert last_exc is not None

@@ -1,3 +1,4 @@
+from enum import StrEnum
 
 import enum
 import uuid
@@ -144,6 +145,12 @@ class LedgerEntry(Base):
         primaryjoin="Account.id == LedgerEntry.account_id",
         foreign_keys="LedgerEntry.account_id",
     )
+class OutboxStatus(StrEnum):
+    PENDING = "PENDING"
+    PUBLISHED = "PUBLISHED"
+    DEAD = "DEAD"
+
+
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
@@ -193,6 +200,23 @@ class OutboxEvent(Base):
         Integer,
         default=0,
         nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default=OutboxStatus.PENDING.value,
+        server_default="PENDING",
+        nullable=False,
+    )
+
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    last_error: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
     )
 
 

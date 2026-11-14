@@ -1,21 +1,36 @@
-"""Redpanda integration for FinGuard's transactional outbox (simulation only)."""
+"""Redpanda integration for FinGuard's transactional outbox with max-attempts, backoff, and DEAD state."""
 
 import json
+import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from confluent_kafka import Producer
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.models import OutboxEvent, ProcessedEvent
+from app.db.models import OutboxEvent, OutboxStatus, ProcessedEvent
 from app.db.session import SessionLocal
+from app.services.resilience import (
+    CircuitBreaker,
+    calculate_backoff_delay,
+    retry_with_backoff,
+)
+
+logger = logging.getLogger("finguard.outbox")
 
 TOPIC = "finguard.transfers.posted.v1"
 DLQ_TOPIC = "finguard.transfers.posted.dlq.v1"
 BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092")
+DEFAULT_MAX_ATTEMPTS = int(os.getenv("FINGUARD_OUTBOX_MAX_ATTEMPTS", "5"))
+
+kafka_circuit_breaker = CircuitBreaker(
+    name="redpanda-broker",
+    failure_threshold=3,
+    recovery_timeout_seconds=15.0,
+)
 
 
 def new_producer():
@@ -55,22 +70,32 @@ def make_envelope(event: OutboxEvent) -> dict:
     }
 
 
-def publish_batch(producer, session_factory=SessionLocal, batch_size: int = 10) -> int:
-    """Publish up to batch_size events; retry pending records in a later call.
-
-    Holds a row lock until delivery is acknowledged (simple local-dev design).
-    The broker and DB cannot commit atomically: duplicate delivery is possible.
-    """
+def publish_batch(
+    producer,
+    session_factory=SessionLocal,
+    batch_size: int = 10,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    base_backoff_seconds: float = 0.0,
+    jitter_ratio: float = 0.2,
+    use_circuit_breaker: bool = False,
+) -> int:
+    """Publish up to batch_size PENDING events; mark DEAD when publish_attempts reaches max_attempts."""
     published = 0
     for _ in range(batch_size):
         failure = None
+        now = datetime.now(timezone.utc)
         with session_factory() as db:
             with db.begin():
                 event = db.scalar(
                     select(OutboxEvent)
                     .where(
                         OutboxEvent.published_at.is_(None),
+                        OutboxEvent.status == OutboxStatus.PENDING.value,
                         OutboxEvent.event_type == "TransferPosted",
+                        or_(
+                            OutboxEvent.next_attempt_at.is_(None),
+                            OutboxEvent.next_attempt_at <= now,
+                        ),
                     )
                     .order_by(OutboxEvent.created_at, OutboxEvent.id)
                     .limit(1)
@@ -80,17 +105,51 @@ def publish_batch(producer, session_factory=SessionLocal, batch_size: int = 10) 
                     return published
 
                 event.publish_attempts += 1
+                envelope = make_envelope(event)
+                key_str = str(event.aggregate_id)
+
+                def _deliver():
+                    send_json(producer, TOPIC, key_str, envelope)
+
                 try:
-                    send_json(producer, TOPIC, str(event.aggregate_id), make_envelope(event))
+                    if use_circuit_breaker:
+                        kafka_circuit_breaker.call(
+                            lambda: retry_with_backoff(
+                                _deliver,
+                                max_attempts=2,
+                                base_delay_seconds=0.05,
+                                max_delay_seconds=0.2,
+                                jitter_ratio=jitter_ratio,
+                            )
+                        )
+                    else:
+                        _deliver()
                 except Exception as exc:
-                    # Commit the attempt counter, but leave published_at NULL.
                     failure = exc
+                    event.last_error = str(exc)[:500]
+                    if event.publish_attempts >= max_attempts:
+                        event.status = OutboxStatus.DEAD.value
+                        event.next_attempt_at = None
+                        logger.error(
+                            f"OutboxEvent {event.id} reached max_attempts={max_attempts}; marked DEAD: {exc}"
+                        )
+                    elif base_backoff_seconds > 0:
+                        delay = calculate_backoff_delay(
+                            event.publish_attempts,
+                            base_delay_seconds=base_backoff_seconds,
+                            max_delay_seconds=60.0,
+                            jitter_ratio=jitter_ratio,
+                        )
+                        event.next_attempt_at = now + timedelta(seconds=delay)
                 else:
-                    event.published_at = datetime.now(timezone.utc)
+                    event.published_at = now
+                    event.status = OutboxStatus.PUBLISHED.value
+                    event.last_error = None
+                    event.next_attempt_at = None
                     published += 1
 
         if failure is not None:
-            print(f"Publish failed; will retry later: {failure}")
+            logger.warning(f"Publish failed; will retry later: {failure}")
             break
     return published
 

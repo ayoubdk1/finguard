@@ -108,6 +108,10 @@ def client(session, monkeypatch):
         "SessionLocal",
         test_session_factory
     )
+    from app.db import session as db_session_module
+    from app.routers import accounts as r_accounts, admin as r_admin, auth as r_auth, fraud as r_fraud, transfers as r_transfers
+    for mod in (db_session_module, r_accounts, r_admin, r_auth, r_fraud, r_transfers):
+        monkeypatch.setattr(mod, "SessionLocal", test_session_factory)
 
     with TestClient(api_module.app) as test_client:
         yield test_client
