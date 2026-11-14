@@ -13,3 +13,7 @@ FinGuard is a full-stack financial engineering and fraud detection platform buil
 - **Enterprise Auth, RBAC, Sessions & MFA**: Granular RBAC (CUSTOMER, ADMIN, FRAUD_ANALYST, AUDITOR), JWT + rotating refresh tokens with reuse detection, session management (/auth/sessions), and TOTP MFA (/auth/mfa/*).
 - **Distributed Reliability & Resilience**: Redis-backed sliding-window rate limiting with graceful fallback, CircuitBreaker, and exponential backoff with jitter.
 - **Production Engineering**: Multi-stage Dockerfiles (ackend/Dockerfile, rontend/Dockerfile + Nginx reverse proxy), structured JSON logging (JsonFormatter), and /health + /health/ready readiness probes.
+
+## Resetting the Test DB
+
+Run `make test-db` or `python backend/scripts/reset_test_db.py` to recreate `finguard_test`.

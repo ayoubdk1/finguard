@@ -69,4 +69,6 @@ def downgrade() -> None:
     op.drop_table('accounts')
     op.drop_table('users')
     op.drop_table('transactions')
+    op.execute('DROP TYPE IF EXISTS account_type')
+    op.execute('DROP TYPE IF EXISTS transaction_status')
     # ### end Alembic commands ###
