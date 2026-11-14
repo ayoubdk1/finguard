@@ -1,19 +1,58 @@
-# FinGuard — Real-Time Fintech Ledger, FX & AI Fraud Detection Platform
+# FinGuard
 
-[[https://github.com/ayoubdk1/finguard/actions/workflows/ci.yml/badge.svg?branch=main]](https://github.com/ayoubdk1/finguard/actions/workflows/ci.yml)
+Double-entry fintech ledger, multi-currency FX transfers, JWT/TOTP authentication, and hybrid rule + ML fraud detection platform built with FastAPI, PostgreSQL, Redis, Redpanda, React, Prometheus, and Grafana.
 
-FinGuard is a full-stack financial engineering and fraud detection platform built with **FastAPI**, **SQLAlchemy 2.0**, **PostgreSQL 16**, **Redis 7**, **Redpanda (Kafka)**, **scikit-learn**, and **React 19 + TypeScript + Vite**.
+## Feature Status
 
-## Key Capabilities
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Double-entry ledger & DB triggers (I1-I9) | Implemented | Append-only `ledger_entries`, balanced transactions, no customer overdrafts, `reconcile_ledger.py` in CI |
+| Multi-currency FX & atomic refunds | Implemented | `TND`, `USD`, `EUR` via `SYSTEM_FX` clearing accounts, duplicate-refund protection |
+| Scoped idempotency & deadlock-free locking | Implemented | `(user_id, endpoint, key)` + payload hash check, sorted UUID `FOR UPDATE` |
+| Private access, RBAC, MFA & sessions | Implemented | Mandatory login, `CUSTOMER`/`ADMIN`/`FRAUD_ANALYST`/`AUDITOR`, encrypted TOTP secrets, refresh rotation |
+| Sliding-window Redis rate limiting & CircuitBreaker | Implemented | Redis `ZSET` sliding window wrapped in `CircuitBreaker` + jittered `retry_with_backoff`, in-memory fallback |
+| Structured JSON logging & `X-Request-ID` | Implemented | `JsonFormatter` with `request_id` context propagation on every HTTP request |
+| Prometheus metrics & Grafana dashboard | Implemented | `prometheus_client` histograms/counters + `monitoring/grafana/dashboards/finguard-overview.json` |
+| Automated `FraudAlert` & state machine | Implemented | `POST /transfers` computes server-side features, creates `PENDING` alerts, enforces `INVESTIGATING` -> `APPROVED`/`BLOCKED` |
+| Outbox publisher worker & `DEAD` state | Implemented | `outbox_events` tracks `PENDING`/`PUBLISHED`/`DEAD` with max-attempts backoff in `outbox-publisher` service |
+| ML fraud model (`GradientBoostingClassifier`) | Partial | Rules-only fallback works when `.joblib` is unavailable; model trained on synthetic data (`docs/ml-evaluation.md`) |
+| Dependency & container security scans | Partial | `pip-audit`, `npm audit`, `Gitleaks`, and `Trivy` run in CI (`pip-audit`/`npm audit` are non-blocking) |
+| Cloud production deployment & live bank rails | Planned | Local Docker Compose stack is ready; cloud IaC and external PSP rails are planned |
 
-- **Double-Entry Ledger & Idempotent Transfers**: ACID-compliant balance updates with pessimistic row-level locking (SELECT ... FOR UPDATE), idempotency keys, and full audit trails.
-- **Multi-Currency & FX Engine**: Exact Decimal currency conversion across USD, EUR, and TND with automated SYSTEM_FX clearing accounts.
-- **Transaction Security & Velocity Controls**: Configurable per-transaction ($10,000) and rolling 24-hour ($50,000) transfer limits, plus atomic full-transfer refunds (POST /transfers/{id}/refund).
-- **AI Fraud Scoring & Analyst Workflow**: Real-time transaction risk scoring, automated FraudAlert generation, and investigation/resolution workflows (/fraud/alerts, /investigate, /resolve).
-- **Enterprise Auth, RBAC, Sessions & MFA**: Granular RBAC (CUSTOMER, ADMIN, FRAUD_ANALYST, AUDITOR), JWT + rotating refresh tokens with reuse detection, session management (/auth/sessions), and TOTP MFA (/auth/mfa/*).
-- **Distributed Reliability & Resilience**: Redis-backed sliding-window rate limiting with graceful fallback, CircuitBreaker, and exponential backoff with jitter.
-- **Production Engineering**: Multi-stage Dockerfiles (ackend/Dockerfile, rontend/Dockerfile + Nginx reverse proxy), structured JSON logging (JsonFormatter), and /health + /health/ready readiness probes.
+## Architecture
 
-## Resetting the Test DB
+```mermaid
+flowchart LR
+    UI["React + Vite + Nginx (:8080)"] -->|/api| API["FastAPI Modular Routers (:8001)"]
+    API -->|ACID Ledger & Alerts| PG[("PostgreSQL 16 (:5433)")]
+    API -->|Sliding-Window ZSET| RD[("Redis 7 (:6379)")]
+    OB["Outbox Publisher Worker"] -->|Poll PENDING / DEAD| PG
+    OB -->|CircuitBreaker + Backoff| RP["Redpanda / Kafka (:19092)"]
+    PROM["Prometheus (:9090)"] -->|Scrape /metrics| API
+    GRAF["Grafana (:3000)"] --> PROM
+```
 
-Run `make test-db` or `python backend/scripts/reset_test_db.py` to recreate `finguard_test`.
+## Database ER Diagram
+
+```mermaid
+erDiagram
+    users ||--o{ accounts : owns
+    users ||--o{ refresh_tokens : holds
+    users ||--o{ login_history : records
+    accounts ||--o{ ledger_entries : posts
+    transactions ||--o{ ledger_entries : contains
+    transactions ||--o| fraud_alerts : triggers
+    accounts ||--o{ fraud_alerts : flagged_on
+    transactions ||--o{ outbox_events : emits
+```
+
+## Quickstart
+
+- `make up` - Start full Docker Compose stack (Postgres, Redis, Redpanda, Backend, Outbox Worker, Frontend, Prometheus, Grafana)
+- `make test-db` - Recreate local `finguard_test` DB and apply Alembic migrations
+- `make lint` - Run `ruff`, `mypy`, `eslint`, and `tsc`
+- `make test` - Run `pytest` and `vitest`
+
+## Screenshots
+
+- Place UI and Grafana screenshots in `docs/screenshots/` (e.g., `login.png`, `dashboard.png`, `fraud-alerts.png`, `grafana.png`).
