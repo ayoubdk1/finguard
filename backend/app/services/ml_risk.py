@@ -71,6 +71,7 @@ def predict_ml_risk(
             "model_version": model_version,
             "ml_prediction": "FRAUD" if pred == 1 else "NORMAL",
             "ml_probability": round(prob, 4),
+        "fraud_probability": round(prob, 4),
             "feature_contributions": contributions,
         }
     except (FileNotFoundError, ImportError, OSError, Exception) as exc:
@@ -79,6 +80,7 @@ def predict_ml_risk(
             "model_version": model_version,
             "ml_prediction": "UNAVAILABLE",
             "ml_probability": None,
+            "fraud_probability": None,
             "feature_contributions": {},
             "fallback_reason": str(exc),
         }
