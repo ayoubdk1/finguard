@@ -5,8 +5,8 @@ import time
 import uuid
 from collections import defaultdict
 
-from fastapi import HTTPException, Request, status
 import redis
+from fastapi import HTTPException, Request, status
 
 from app.core.metrics import RATE_LIMIT_HITS_TOTAL
 from app.services.resilience import (

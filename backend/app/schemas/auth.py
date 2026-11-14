@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import (
@@ -8,7 +9,6 @@ from pydantic import (
     Field,
     field_validator,
 )
-
 
 # ============================================
 # REGISTRATION REQUEST
@@ -189,7 +189,6 @@ class ResetPasswordRequest(BaseModel):
 # ADMIN USER MANAGEMENT
 # ============================================
 
-from typing import Literal
 
 
 class AdminCreateUserRequest(BaseModel):

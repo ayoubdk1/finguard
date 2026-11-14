@@ -13,9 +13,9 @@ from app.core.metrics import (
     HTTP_REQUESTS_TOTAL,
     render_prometheus_metrics,
 )
-from app.db.session import SessionLocal, engine
-from app.services.risk_assessment import assess_transaction_risk  # noqa: F401
+from app.db.session import SessionLocal, engine  # noqa: F401
 from app.routers import accounts, admin, auth, fraud, transfers
+from app.services.risk_assessment import assess_transaction_risk  # noqa: F401
 
 configure_json_logging()
 logger = logging.getLogger("finguard.http")

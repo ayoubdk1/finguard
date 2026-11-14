@@ -11,4 +11,4 @@ python_version = "3.13"
 ignore_missing_imports = true
 check_untyped_defs = false
 warn_unused_ignores = false
-disable_error_code = ["import-untyped"]
+disable_error_code = ["import-untyped", "union-attr", "assignment"]

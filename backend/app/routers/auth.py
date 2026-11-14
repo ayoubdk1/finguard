@@ -1,41 +1,18 @@
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import logging
 import os
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 
-from app.core.currencies import SUPPORTED_CURRENCIES
-from app.core.logging import configure_json_logging
-from app.core.metrics import FRAUD_RISK_SCORE, TRANSFERS_TOTAL
 from app.db.models import (
-    Account,
-    AccountType,
-    ExchangeRate,
-    FraudAlert,
-    FraudAlertStatus,
-    LedgerEntry,
     LoginHistory,
-    OutboxEvent,
-    ProcessedEvent,
-    Transaction,
-    TransactionStatus,
     User,
 )
-from app.db.session import SessionLocal, engine
-from app.schemas.account import AccountCreate, AccountResponse
+from app.db.session import SessionLocal
 from app.schemas.auth import (
-    AdminCreateUserRequest,
-    AdminResetPasswordRequest,
-    AdminUpdateUserRequest,
-    AdminUserResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
-    LoginHistoryItem,
     LoginRequest,
     LogoutRequest,
     MfaLoginRequest,
@@ -49,14 +26,7 @@ from app.schemas.auth import (
     SessionListResponse,
     TokenResponse,
 )
-from app.schemas.balance import BalanceResponse
-from app.schemas.deposit import DepositCreate
-from app.schemas.fraud import FraudAlertResponse, FraudResolutionRequest
-from app.schemas.history import TransactionHistoryItem, TransactionHistoryResponse
-from app.schemas.risk import RiskAssessmentRequest
-from app.schemas.transfer import TransferCreate, TransferResponse
-from app.schemas.user import UserCreate, UserResponse
-from app.security.dependencies import ensure_user_owns_account_id, get_current_user
+from app.security.dependencies import get_current_user
 from app.security.mfa import (
     decrypt_mfa_secret,
     encrypt_mfa_secret,
@@ -65,7 +35,6 @@ from app.security.mfa import (
     verify_totp_code,
 )
 from app.security.passwords import hash_password, verify_password
-from app.security.permissions import Permission, has_permission
 from app.security.rate_limit import check_login_rate_limit
 from app.security.tokens import (
     create_access_token,
@@ -80,21 +49,6 @@ from app.security.tokens import (
     verify_mfa_token,
     verify_password_reset_token,
 )
-from app.services.fx import ExchangeRateNotFound, FXError, calculate_fx_conversion, get_latest_rate
-from app.services.ledger import (
-    AccountNotFound,
-    EntryInput,
-    IdempotencyConflict,
-    InsufficientFunds,
-    InvalidTransaction,
-    LedgerError,
-    compute_request_hash,
-    get_balance,
-    post_transaction,
-)
-from app.services.limits import DailyLimitExceeded, TransactionLimitExceeded, check_transfer_limits
-from app.services.outbox import enqueue_transfer_posted
-from app.services.risk_assessment import assess_transaction_risk
 
 logger = logging.getLogger("finguard.security")
 
@@ -428,6 +382,7 @@ def reset_password(
     _rate_limit: None = Depends(check_login_rate_limit),
 ):
     import hashlib as _hashlib
+
     import jwt as _jwt
 
     try:

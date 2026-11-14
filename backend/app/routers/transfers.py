@@ -1,86 +1,28 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-import logging
-import os
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import func, select
 
-from app.core.currencies import SUPPORTED_CURRENCIES
-from app.core.logging import configure_json_logging
 from app.core.metrics import FRAUD_RISK_SCORE, TRANSFERS_TOTAL
 from app.db.models import (
     Account,
     AccountType,
-    ExchangeRate,
     FraudAlert,
     FraudAlertStatus,
     LedgerEntry,
-    LoginHistory,
-    OutboxEvent,
-    ProcessedEvent,
     Transaction,
     TransactionStatus,
     User,
 )
-from app.db.session import SessionLocal, engine
-from app.schemas.account import AccountCreate, AccountResponse
-from app.schemas.auth import (
-    AdminCreateUserRequest,
-    AdminResetPasswordRequest,
-    AdminUpdateUserRequest,
-    AdminUserResponse,
-    ForgotPasswordRequest,
-    ForgotPasswordResponse,
-    LoginHistoryItem,
-    LoginRequest,
-    LogoutRequest,
-    MfaLoginRequest,
-    MfaSetupResponse,
-    MfaVerifyRequest,
-    RefreshRequest,
-    RegisterRequest,
-    RegisterResponse,
-    ResetPasswordRequest,
-    SessionItem,
-    SessionListResponse,
-    TokenResponse,
-)
-from app.schemas.balance import BalanceResponse
+from app.db.session import SessionLocal
 from app.schemas.deposit import DepositCreate
-from app.schemas.fraud import FraudAlertResponse, FraudResolutionRequest
-from app.schemas.history import TransactionHistoryItem, TransactionHistoryResponse
-from app.schemas.risk import RiskAssessmentRequest
 from app.schemas.transfer import TransferCreate, TransferResponse
-from app.schemas.user import UserCreate, UserResponse
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
-from app.security.mfa import (
-    decrypt_mfa_secret,
-    encrypt_mfa_secret,
-    generate_mfa_secret,
-    generate_totp_uri,
-    verify_totp_code,
-)
-from app.security.passwords import hash_password, verify_password
 from app.security.permissions import Permission, has_permission
-from app.security.rate_limit import check_login_rate_limit
-from app.security.tokens import (
-    create_access_token,
-    create_mfa_token,
-    create_password_reset_token,
-    get_active_sessions_for_user,
-    issue_refresh_token,
-    revoke_all_user_sessions,
-    revoke_refresh_token,
-    revoke_session_by_id,
-    rotate_refresh_token,
-    verify_mfa_token,
-    verify_password_reset_token,
-)
-from app.services.fx import ExchangeRateNotFound, FXError, calculate_fx_conversion, get_latest_rate
+from app.services.fx import ExchangeRateNotFound, calculate_fx_conversion, get_latest_rate
 from app.services.ledger import (
     AccountNotFound,
     EntryInput,

@@ -1,5 +1,5 @@
-from app.services.risk import assess_risk
 from app.services.ml_risk import predict_ml_risk
+from app.services.risk import assess_risk
 
 
 def assess_transaction_risk(

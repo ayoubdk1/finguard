@@ -1,10 +1,9 @@
-from functools import lru_cache
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import joblib
 import pandas as pd
-
 
 MODEL_FILE = Path(__file__).resolve().parents[2] / "models" / "fraud_gradient_boosting.joblib"
 META_FILE = Path(__file__).resolve().parents[2] / "models" / "fraud_gradient_boosting.meta.json"

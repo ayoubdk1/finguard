@@ -1,9 +1,9 @@
-from collections import defaultdict
-from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, Callable
 import uuid
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -51,11 +51,13 @@ def compute_request_hash(payload: dict[str, Any]) -> str:
 
 def get_balance(session: Session, account_id: uuid.UUID) -> int:
     """Rule I4: the balance is always derived from the ledger."""
-    return session.scalar(
+    val = session.scalar(
         select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
             LedgerEntry.account_id == account_id
         )
     )
+    return int(val or 0)
+
 
 
 def _find_by_key(session: Session, key: str, scope: str = "global") -> Transaction | None:
@@ -72,7 +74,7 @@ def post_transaction(
     idempotency_key: str,
     entries: list[EntryInput],
     description: str = "",
-    before_commit: Callable[[Session, Transaction], None] | None = None,
+    before_commit: Callable[[Session, Transaction], Any] | None = None,
     *,
     idempotency_scope: str = "global",
     request_hash: str | None = None,

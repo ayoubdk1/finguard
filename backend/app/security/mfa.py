@@ -1,4 +1,11 @@
+import base64
+import hashlib
+import hmac
+import os
+
 import pyotp
+
+from app.security.tokens import get_jwt_secret
 
 
 def generate_mfa_secret() -> str:
@@ -17,11 +24,7 @@ def verify_totp_code(secret: str, code: str) -> bool:
     # valid_window=1 allows a +/- 30s clock skew window
     return bool(totp.verify(code.strip(), valid_window=1))
 
-import base64
-import hashlib
-import hmac
-import os
-from app.security.tokens import get_jwt_secret
+
 
 
 def _derive_encryption_key() -> bytes:

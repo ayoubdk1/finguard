@@ -1,8 +1,7 @@
-from enum import StrEnum
-
 import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
