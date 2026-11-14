@@ -99,14 +99,14 @@ jobs:
       - run: |
           docker build -t finguard-backend:ci ./backend
           docker build -t finguard-frontend:ci ./frontend
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: finguard-backend:ci
           format: table
           exit-code: "0"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: finguard-frontend:ci
           format: table
