@@ -147,12 +147,25 @@ class MfaVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6)
 
 
+class MfaDisableRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class MfaBackupCodesResponse(BaseModel):
+
+    backup_codes: list[str]
+
+
 class MfaLoginRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
     mfa_token: str
-    code: str = Field(min_length=6, max_length=6)
+    code: str = Field(min_length=6, max_length=16)
 
 
 # ============================================
@@ -174,7 +187,6 @@ class ForgotPasswordRequest(BaseModel):
 class ForgotPasswordResponse(BaseModel):
 
     message: str
-    reset_token: str | None = None
 
 
 class ResetPasswordRequest(BaseModel):

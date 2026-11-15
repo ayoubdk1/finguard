@@ -46,7 +46,8 @@ def test_mfa_setup_and_enable_flow():
     assert bad_resp.status_code == 400
 
     # 3. Enable with valid code
-    valid_code = pyotp.TOTP(secret).now()
+    import time
+    valid_code = pyotp.TOTP(secret).at(int(time.time()) - 30)
     ok_resp = client.post("/auth/mfa/enable", headers=headers, json={"code": valid_code})
     assert ok_resp.status_code == 200
 
@@ -70,11 +71,11 @@ def test_mfa_setup_and_enable_flow():
     assert final_data["refresh_token"]
 
     # 6. Disable MFA
-    disable_code = pyotp.TOTP(secret).now()
+    disable_code = pyotp.TOTP(secret).at(int(time.time()) + 30)
     disable_resp = client.post(
         "/auth/mfa/disable",
         headers={"Authorization": f"Bearer {final_data['access_token']}"},
-        json={"code": disable_code},
+        json={"password": password, "code": disable_code},
     )
     assert disable_resp.status_code == 200
 

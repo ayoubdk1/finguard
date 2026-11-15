@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.db.models import Account, User
 from app.db.session import SessionLocal
 from app.security.permissions import Permission, has_permission
-from app.security.tokens import verify_access_token
+from app.security.tokens import verify_access_token, verify_access_token_claims
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -52,11 +52,9 @@ def get_current_user(
     with SessionLocal() as session:
         user = session.get(User, user_id)
         if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found", headers={"WWW-Authenticate": "Bearer"})
+        if getattr(user, "status", "ACTIVE") != "ACTIVE":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active")
         session.expunge(user)
         return user
 
@@ -129,3 +127,15 @@ def ensure_user_owns_account_id(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not own this account",
             )
+
+
+def require_recent_login(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme), max_age_seconds: int = 900) -> None:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return
+    try:
+        claims = verify_access_token_claims(credentials.credentials)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
+    import time
+    if (time.time() - int(claims.get("iat", 0))) > max_age_seconds:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Recent login required for MFA changes")

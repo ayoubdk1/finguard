@@ -234,7 +234,7 @@ def create_mfa_token(user_id: UUID) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
-def verify_mfa_token(token: str) -> UUID:
+def verify_mfa_token_with_jti(token: str) -> tuple[UUID, str]:
     try:
         payload = jwt.decode(
             token,
@@ -246,9 +246,29 @@ def verify_mfa_token(token: str) -> UUID:
         )
         if payload.get("type") != "mfa_pending":
             raise ValueError("Invalid MFA challenge token")
-        return UUID(payload["sub"])
+        return UUID(payload["sub"]), str(payload["jti"])
     except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as exc:
         raise ValueError("Invalid or expired MFA token") from exc
+
+
+def verify_mfa_token(token: str) -> UUID:
+    user_id, _ = verify_mfa_token_with_jti(token)
+    return user_id
+
+
+def get_refresh_token_family_id(session: Session, raw_token: str) -> UUID | None:
+    db_token = session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_token)))
+    return db_token.family_id if db_token is not None else None
+
+
+def verify_access_token_claims(token: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM], issuer=JWT_ISSUER, audience=JWT_AUDIENCE, options={"require": ["sub", "iat", "exp", "iss", "aud"]})
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type")
+        return payload
+    except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError("Invalid or expired authentication token") from exc
 
 
 PASSWORD_RESET_EXPIRE_MINUTES = 15
