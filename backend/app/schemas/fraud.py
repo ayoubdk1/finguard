@@ -11,11 +11,14 @@ class FraudAlertResponse(BaseModel):
     transaction_id: UUID | None = None
     account_id: UUID
     risk_score: float
-    reasons: str
+    reasons: list[str]
     status: str
     analyst_id: UUID | None = None
+    assigned_to: UUID | None = None
     analyst_notes: str | None = None
     created_at: datetime
+    investigated_at: datetime | None = None
+    sla_due_at: datetime | None = None
     resolved_at: datetime | None = None
 
 
@@ -24,3 +27,9 @@ class FraudResolutionRequest(BaseModel):
 
     decision: str = Field(pattern="^(APPROVED|BLOCKED)$")
     analyst_notes: str = Field(min_length=3, max_length=1000)
+
+
+class FraudAssignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    analyst_id: UUID | None = None

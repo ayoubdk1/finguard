@@ -346,13 +346,13 @@ class FraudAlert(Base):
         ForeignKey("accounts.id"),
         nullable=False,
     )
-    risk_score: Mapped[float] = mapped_column(
+    risk_score: Mapped[int] = mapped_column(
         BigInteger,  # Score scaled by 1000 (e.g. 0.850 = 850)
         nullable=False,
     )
-    reasons: Mapped[str] = mapped_column(
-        String(500),
-        default="",
+    reasons: Mapped[list[str]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        default=list,
         nullable=False,
     )
     status: Mapped[FraudAlertStatus] = mapped_column(
@@ -372,6 +372,18 @@ class FraudAlert(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+    investigated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    sla_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -409,3 +421,15 @@ class MfaTokenState(Base):
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TransferAttempt(Base):
+    __tablename__ = "transfer_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    destination_account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

@@ -95,3 +95,18 @@ https://scikit-learn.org/stable/common_pitfalls.html
 - **Label-Rule Correlation**: Because the synthetic generator shares thresholds with the rule engine (`risk.py`), the Gradient Boosting model partly learns the generator's rule boundary rather than independent real-world fraud patterns.
 - **5-Fold Stratified Cross-Validation**: Mean Average Precision = **0.785** (95% CI: **[0.712, 0.858]**).
 - **Graceful Fallback**: In production, if `fraud_gradient_boosting.joblib` is missing or fails to load, `predict_ml_risk` falls back cleanly to rule-based scoring (`ml_available: false`) without returning HTTP 500.
+
+## Model Limitations, Honesty & Governance
+
+- **Synthetic Training Data**: The current `GradientBoostingClassifier` (`v1.0.0`) is trained on `backend/data/synthetic_transactions.csv` (**1,000 rows**, **101 fraud cases**), not production bank transactions.
+- **Test Set Size**: Holdout evaluation uses **150 test rows** containing **15 test fraud cases**; reported precision/recall/AP metrics and 5-fold CV confidence intervals (`[0.712, 0.858]`) reflect this small synthetic sample.
+- **Rules-First Design**: Deterministic rule checks (amount thresholds, velocity, new destination high amount, amount spike vs. account average, and failed transfer attempts) are the primary risk engine; ML predictions serve as an advisory signal.
+- **Human-in-the-Loop (`automatic_block: False`)**: FinGuard never auto-blocks customer accounts from ML output alone. Flagged transfers generate `PENDING` `FraudAlert` records with a 24h SLA for analyst investigation and explicit resolution.
+- **Artifact Integrity**: `ml_risk.py` verifies the SHA-256 digest of `fraud_gradient_boosting.joblib` against `model_sha256` in `fraud_gradient_boosting.meta.json` at load time, and `/health/ready` reports `fraud_model` readiness.
+
+### Retraining Steps
+
+1. Prepare/update labeled data in `backend/data/synthetic_transactions.csv`.
+2. Run `python backend/scripts/train_fraud_models.py` from the repo root.
+3. Verify `backend/models/fraud_gradient_boosting.joblib` and `fraud_gradient_boosting.meta.json` (including `model_sha256`).
+4. Run `pytest backend/tests/test_phase3_fraud_ml.py` before committing.
