@@ -27,7 +27,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
         Permission.ACCOUNT_CREATE_OWN,
         Permission.ACCOUNT_READ_OWN,
         Permission.TRANSFER_CREATE,
-        Permission.RISK_ASSESS,
     }),
     Role.ADMIN: frozenset(Permission),
     Role.FRAUD_ANALYST: frozenset({

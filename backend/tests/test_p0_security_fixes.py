@@ -33,13 +33,13 @@ def test_forgot_password_does_not_leak_reset_token_by_default(monkeypatch):
     )
     resp = client.post("/auth/forgot-password", json={"email": email})
     assert resp.status_code == 200
-    assert resp.json()["reset_token"] is None
+    assert "reset_token" not in resp.json()
 
 
 def test_mfa_secret_encrypted_at_rest():
     raw = generate_mfa_secret()
     enc = encrypt_mfa_secret(raw)
-    assert enc.startswith("enc:v1:")
+    assert enc.startswith("enc:v2:")
     assert raw not in enc
     assert decrypt_mfa_secret(enc) == raw
 

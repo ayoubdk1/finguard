@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import threading
@@ -9,115 +10,104 @@ import redis
 from fastapi import HTTPException, Request, status
 
 from app.core.metrics import RATE_LIMIT_HITS_TOTAL
-from app.services.resilience import (
-    CircuitBreaker,
-    CircuitBreakerOpenError,
-    retry_with_backoff,
-)
+from app.services.resilience import CircuitBreaker, CircuitBreakerOpenError, retry_with_backoff
 
 logger = logging.getLogger("finguard.ratelimit")
 
 LOGIN_MAX_ATTEMPTS = int(os.getenv("FINGUARD_LOGIN_RATE_LIMIT_MAX", "5"))
-LOGIN_WINDOW_SECONDS = float(
-    os.getenv("FINGUARD_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
-)
-REDIS_KEY_PREFIX = "finguard:ratelimit:sliding:login:"
+LOGIN_WINDOW_SECONDS = float(os.getenv("FINGUARD_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+MFA_MAX_ATTEMPTS = int(os.getenv("FINGUARD_MFA_RATE_LIMIT_MAX", "5"))
+MFA_WINDOW_SECONDS = float(os.getenv("FINGUARD_MFA_RATE_LIMIT_WINDOW_SECONDS", "60"))
+REFRESH_MAX_ATTEMPTS = int(os.getenv("FINGUARD_REFRESH_RATE_LIMIT_MAX", "10"))
+REFRESH_WINDOW_SECONDS = float(os.getenv("FINGUARD_REFRESH_RATE_LIMIT_WINDOW_SECONDS", "60"))
 
-_login_attempts: dict[str, list[float]] = defaultdict(list)
+_buckets: dict[str, list[float]] = defaultdict(list)
 _lock = threading.Lock()
-
-redis_circuit_breaker = CircuitBreaker(
-    name="redis-ratelimit",
-    failure_threshold=2,
-    recovery_timeout_seconds=10.0,
-)
+redis_circuit_breaker = CircuitBreaker(name="redis-ratelimit", failure_threshold=2, recovery_timeout_seconds=10.0)
 
 
 def _get_redis_client() -> redis.Redis | None:
     redis_url = os.getenv("FINGUARD_REDIS_URL", "redis://localhost:6379/0").strip()
     if not redis_url:
         return None
-    return redis.Redis.from_url(
-        redis_url,
-        socket_connect_timeout=0.3,
-        socket_timeout=0.3,
-        decode_responses=True,
-    )
+    return redis.Redis.from_url(redis_url, socket_connect_timeout=0.3, socket_timeout=0.3, decode_responses=True)
 
 
-def _check_in_memory_sliding_window(client_ip: str) -> None:
+def extract_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
+
+def _check_in_memory(bucket_key: str, max_attempts: int, window_seconds: float, detail: str) -> None:
     now = time.monotonic()
-    window_start = now - LOGIN_WINDOW_SECONDS
-
+    window_start = now - window_seconds
     with _lock:
-        recent = [t for t in _login_attempts[client_ip] if t > window_start]
-        if len(recent) >= LOGIN_MAX_ATTEMPTS:
-            _login_attempts[client_ip] = recent
+        recent = [t for t in _buckets[bucket_key] if t > window_start]
+        if len(recent) >= max_attempts:
+            _buckets[bucket_key] = recent
             RATE_LIMIT_HITS_TOTAL.labels(limiter="in_memory_sliding").inc()
-            logger.warning(f"Rate limit exceeded (in-memory) for IP {client_ip}")
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many login attempts. Please try again later.",
-                headers={"Retry-After": str(int(LOGIN_WINDOW_SECONDS))},
-            )
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail, headers={"Retry-After": str(max(1, int(window_seconds)))})
         recent.append(now)
-        _login_attempts[client_ip] = recent
+        _buckets[bucket_key] = recent
 
 
-def check_login_rate_limit(request: Request) -> None:
-    """Sliding-window rate limiter backed by a Redis sorted set (ZSET)."""
-    client_ip = request.client.host if request.client else "unknown"
+def check_rate_limit(bucket: str, key: str, max_attempts: int, window_seconds: float, detail: str = "Too many requests.") -> None:
+    bucket_key = f"{bucket}:{key}"
     client = _get_redis_client()
-
     if client is not None:
-        key = f"{REDIS_KEY_PREFIX}{client_ip}"
+        redis_key = f"finguard:ratelimit:{bucket_key}"
         now_ms = int(time.time() * 1000)
-        window_start_ms = now_ms - int(LOGIN_WINDOW_SECONDS * 1000)
+        window_start_ms = now_ms - int(window_seconds * 1000)
         member = f"{now_ms}:{uuid.uuid4().hex[:8]}"
 
-        def _exec_sliding_window() -> int:
+        def _exec() -> int:
             pipe = client.pipeline()
-            pipe.zremrangebyscore(key, "-inf", window_start_ms)
-            pipe.zcard(key)
+            pipe.zremrangebyscore(redis_key, "-inf", window_start_ms)
+            pipe.zcard(redis_key)
             _, current_count = pipe.execute()
-            if int(current_count) >= LOGIN_MAX_ATTEMPTS:
+            if int(current_count) >= max_attempts:
                 return int(current_count) + 1
             pipe2 = client.pipeline()
-            pipe2.zadd(key, {member: now_ms})
-            pipe2.expire(key, int(LOGIN_WINDOW_SECONDS) + 1)
+            pipe2.zadd(redis_key, {member: now_ms})
+            pipe2.expire(redis_key, int(window_seconds) + 1)
             pipe2.execute()
             return int(current_count) + 1
 
         try:
-            count = redis_circuit_breaker.call(
-                lambda: retry_with_backoff(
-                    _exec_sliding_window,
-                    max_attempts=2,
-                    base_delay_seconds=0.02,
-                    max_delay_seconds=0.05,
-                    jitter_ratio=0.25,
-                )
-            )
-            if count > LOGIN_MAX_ATTEMPTS:
+            count = redis_circuit_breaker.call(lambda: retry_with_backoff(_exec, max_attempts=2, base_delay_seconds=0.02, max_delay_seconds=0.05, jitter_ratio=0.25))
+            if count > max_attempts:
                 RATE_LIMIT_HITS_TOTAL.labels(limiter="redis_sliding").inc()
-                logger.warning(f"Rate limit exceeded (redis sliding window) for IP {client_ip}")
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many login attempts. Please try again later.",
-                    headers={"Retry-After": str(int(LOGIN_WINDOW_SECONDS))},
-                )
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail, headers={"Retry-After": str(max(1, int(window_seconds)))})
             return
         except (redis.exceptions.RedisError, CircuitBreakerOpenError):
             pass
+    _check_in_memory(bucket_key, max_attempts, window_seconds, detail)
 
-    _check_in_memory_sliding_window(client_ip)
+
+def check_login_rate_limit(request: Request, email: str | None = None) -> None:
+    ip = extract_client_ip(request)
+    check_rate_limit("login:ip", ip, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts. Please try again later.")
+    if email:
+        acct_key = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:24]
+        check_rate_limit("login:acct", acct_key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts for this account.")
+
+
+def check_mfa_rate_limit(account_key: str) -> None:
+    check_rate_limit("mfa:acct", account_key, MFA_MAX_ATTEMPTS, MFA_WINDOW_SECONDS, "Too many MFA attempts. Please try again later.")
+
+
+def check_refresh_rate_limit(family_key: str) -> None:
+    check_rate_limit("refresh:family", family_key, REFRESH_MAX_ATTEMPTS, REFRESH_WINDOW_SECONDS, "Too many token refresh attempts.")
 
 
 def reset_login_rate_limits() -> None:
     with _lock:
-        _login_attempts.clear()
+        _buckets.clear()
     redis_circuit_breaker.reset()
-
     client = _get_redis_client()
     if client is not None:
         try:

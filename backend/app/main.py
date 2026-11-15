@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -19,6 +20,24 @@ from app.services.risk_assessment import assess_transaction_risk  # noqa: F401
 
 configure_json_logging()
 logger = logging.getLogger("finguard.http")
+
+
+def validate_production_config() -> None:
+    if os.getenv("FINGUARD_ENV", "development").lower() != "production":
+        return
+    jwt_secret = os.getenv("FINGUARD_JWT_SECRET", "").strip()
+    if not jwt_secret or jwt_secret == "dev-only-insecure-secret-key-change-me-32chars" or len(jwt_secret) < 32:
+        raise RuntimeError("FATAL: FINGUARD_JWT_SECRET must be at least 32 chars and non-default in production")
+    if os.getenv("FINGUARD_DEMO_MODE") == "1":
+        raise RuntimeError("FATAL: FINGUARD_DEMO_MODE=1 cannot be enabled in production")
+    cors_raw = os.getenv("FINGUARD_CORS_ORIGINS", "")
+    if "*" in [o.strip() for o in cors_raw.split(",")]:
+        raise RuntimeError("FATAL: Wildcard CORS origin (*) is forbidden in production")
+    if not os.getenv("FINGUARD_MFA_ENCRYPTION_KEY", "").strip():
+        raise RuntimeError("FATAL: FINGUARD_MFA_ENCRYPTION_KEY must be set in production")
+
+
+validate_production_config()
 
 app = FastAPI(title="FinGuard API")
 
@@ -42,7 +61,8 @@ app.add_middleware(
 
 @app.middleware("http")
 async def observability_and_security_middleware(request: Request, call_next):
-    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    raw_req_id = (request.headers.get("X-Request-ID") or "").strip()
+    req_id = raw_req_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", raw_req_id) else str(uuid.uuid4())
     request.state.request_id = req_id
     token = request_id_ctx.set(req_id)
     start_time = time.perf_counter()
