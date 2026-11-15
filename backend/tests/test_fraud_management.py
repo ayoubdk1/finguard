@@ -38,7 +38,7 @@ def test_fraud_investigation_lifecycle(client, session, world, monkeypatch):
     alert = FraudAlert(
         account_id=world["alice"].id,
         risk_score=850,  # 0.850
-        reasons="HIGH_AMOUNT, VELOCITY_BURST",
+        reasons=["HIGH_AMOUNT", "VELOCITY_BURST"],
         status="PENDING",
     )
     session.add(alert)

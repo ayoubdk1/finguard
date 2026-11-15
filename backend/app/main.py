@@ -131,6 +131,9 @@ def readiness_check():
     except Exception:
         checks["redis"] = "degraded"
 
+    from app.services.ml_risk import is_fraud_model_ready
+    checks["fraud_model"] = "ok" if is_fraud_model_ready() else "missing_or_invalid"
+
     if not is_ready:
         raise HTTPException(
             status_code=503,

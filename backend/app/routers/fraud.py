@@ -14,7 +14,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import SessionLocal
-from app.schemas.fraud import FraudAlertResponse, FraudResolutionRequest
+from app.schemas.fraud import FraudAlertResponse, FraudAssignRequest, FraudResolutionRequest
 from app.schemas.risk import RiskAssessmentRequest
 from app.security.dependencies import get_current_user
 from app.security.permissions import Permission, has_permission
@@ -43,18 +43,14 @@ def list_fraud_alerts(
             query = query.where(FraudAlert.status == status_filter.upper())
         alerts = db.scalars(query.order_by(FraudAlert.created_at.desc())).all()
         return [
-            FraudAlertResponse(
-                id=a.id,
-                transaction_id=a.transaction_id,
-                account_id=a.account_id,
-                risk_score=float(a.risk_score) / 1000.0,
-                reasons=a.reasons,
-                status=a.status.value if hasattr(a.status, 'value') else str(a.status),
-                analyst_id=a.analyst_id,
-                analyst_notes=a.analyst_notes,
-                created_at=a.created_at,
-                resolved_at=a.resolved_at,
-            )
+FraudAlertResponse(
+            id=a.id, transaction_id=a.transaction_id, account_id=a.account_id,
+            risk_score=float(a.risk_score) / 1000.0,
+            reasons=list(a.reasons or []) if isinstance(a.reasons, list) else [str(a.reasons)],
+            status=a.status.value if hasattr(a.status, "value") else str(a.status),
+            analyst_id=a.analyst_id, assigned_to=a.assigned_to, analyst_notes=a.analyst_notes,
+            created_at=a.created_at, investigated_at=a.investigated_at, sla_due_at=a.sla_due_at, resolved_at=a.resolved_at,
+        )
             for a in alerts
         ]
 
@@ -80,19 +76,17 @@ def start_investigation(
             )
         alert.status = FraudAlertStatus.INVESTIGATING
         alert.analyst_id = current_user.id
+        alert.assigned_to = alert.assigned_to or current_user.id
+        alert.investigated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(alert)
         return FraudAlertResponse(
-            id=alert.id,
-            transaction_id=alert.transaction_id,
-            account_id=alert.account_id,
+            id=alert.id, transaction_id=alert.transaction_id, account_id=alert.account_id,
             risk_score=float(alert.risk_score) / 1000.0,
-            reasons=alert.reasons,
-            status=alert.status if isinstance(alert.status, str) else alert.status.value,
-            analyst_id=alert.analyst_id,
-            analyst_notes=alert.analyst_notes,
-            created_at=alert.created_at,
-            resolved_at=alert.resolved_at,
+            reasons=list(alert.reasons or []) if isinstance(alert.reasons, list) else [str(alert.reasons)],
+            status=alert.status.value if hasattr(alert.status, "value") else str(alert.status),
+            analyst_id=alert.analyst_id, assigned_to=alert.assigned_to, analyst_notes=alert.analyst_notes,
+            created_at=alert.created_at, investigated_at=alert.investigated_at, sla_due_at=alert.sla_due_at, resolved_at=alert.resolved_at,
         )
 
 
@@ -132,18 +126,42 @@ def resolve_alert(
         db.commit()
         db.refresh(alert)
         return FraudAlertResponse(
-            id=alert.id,
-            transaction_id=alert.transaction_id,
-            account_id=alert.account_id,
+            id=alert.id, transaction_id=alert.transaction_id, account_id=alert.account_id,
             risk_score=float(alert.risk_score) / 1000.0,
-            reasons=alert.reasons,
-            status=alert.status if isinstance(alert.status, str) else alert.status.value,
-            analyst_id=alert.analyst_id,
-            analyst_notes=alert.analyst_notes,
-            created_at=alert.created_at,
-            resolved_at=alert.resolved_at,
+            reasons=list(alert.reasons or []) if isinstance(alert.reasons, list) else [str(alert.reasons)],
+            status=alert.status.value if hasattr(alert.status, "value") else str(alert.status),
+            analyst_id=alert.analyst_id, assigned_to=alert.assigned_to, analyst_notes=alert.analyst_notes,
+            created_at=alert.created_at, investigated_at=alert.investigated_at, sla_due_at=alert.sla_due_at, resolved_at=alert.resolved_at,
         )
 
+
+
+
+@router.post("/fraud/alerts/{alert_id}/assign", response_model=FraudAlertResponse)
+def assign_alert(alert_id: UUID, payload: FraudAssignRequest, current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.FRAUD_ALERT_RESOLVE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    with SessionLocal() as db:
+        alert = db.get(FraudAlert, alert_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Fraud alert not found")
+        cur = alert.status.value if hasattr(alert.status, "value") else str(alert.status)
+        if cur in (FraudAlertStatus.APPROVED.value, FraudAlertStatus.BLOCKED.value):
+            raise HTTPException(status_code=409, detail=f"Cannot assign resolved alert in status {cur}")
+        target_id = payload.analyst_id or current_user.id
+        if db.get(User, target_id) is None:
+            raise HTTPException(status_code=404, detail="Assignee user not found")
+        alert.assigned_to = target_id
+        db.commit()
+        db.refresh(alert)
+        return FraudAlertResponse(
+            id=alert.id, transaction_id=alert.transaction_id, account_id=alert.account_id,
+            risk_score=float(alert.risk_score) / 1000.0,
+            reasons=list(alert.reasons or []) if isinstance(alert.reasons, list) else [str(alert.reasons)],
+            status=alert.status.value if hasattr(alert.status, "value") else str(alert.status),
+            analyst_id=alert.analyst_id, assigned_to=alert.assigned_to, analyst_notes=alert.analyst_notes,
+            created_at=alert.created_at, investigated_at=alert.investigated_at, sla_due_at=alert.sla_due_at, resolved_at=alert.resolved_at,
+        )
 
 @router.post("/risk/assess")
 def assess_risk_endpoint(

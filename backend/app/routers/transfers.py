@@ -17,6 +17,7 @@ from app.db.models import (
     LedgerEntry,
     Transaction,
     TransactionStatus,
+    TransferAttempt,
     User,
 )
 from app.db.session import SessionLocal
@@ -441,6 +442,15 @@ def create_transfer(
                 raise HTTPException(status_code=409, detail=str(exc))
             except InsufficientFunds as exc:
                 db.rollback()
+                src_acc = db.get(Account, data.source_account_id)
+                db.add(TransferAttempt(
+                    source_account_id=data.source_account_id,
+                    destination_account_id=data.destination_account_id,
+                    amount_cents=data.amount_cents,
+                    currency=src_acc.currency if src_acc else "USD",
+                    reason="INSUFFICIENT_FUNDS",
+                ))
+                db.commit()
                 raise HTTPException(status_code=409, detail=str(exc))
             except AccountNotFound as exc:
                 db.rollback()

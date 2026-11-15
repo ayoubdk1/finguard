@@ -20,5 +20,6 @@
     "average_precision": 0.8276,
     "accuracy": 0.9267
   },
-  "caveat": "Trained on synthetic data where labels correlate with rule-based thresholds; evaluate on real labeled production data before autonomous blocking."
+  "caveat": "Trained on synthetic data where labels correlate with rule-based thresholds; evaluate on real labeled production data before autonomous blocking.",
+  "model_sha256": "c99ee651444051036c4bb838ad38c9a5bf968014d09b07b241773444585b513b"
 }
