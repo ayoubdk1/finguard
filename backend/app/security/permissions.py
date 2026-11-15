@@ -26,7 +26,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     Role.CUSTOMER: frozenset({
         Permission.ACCOUNT_CREATE_OWN,
         Permission.ACCOUNT_READ_OWN,
-        Permission.DEPOSIT_CREATE,
         Permission.TRANSFER_CREATE,
         Permission.RISK_ASSESS,
     }),

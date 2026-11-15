@@ -22,7 +22,7 @@ def _override_user(monkeypatch, role: str, user_id=None):
 
 
 def test_role_permission_matrix():
-    assert has_permission(Role.CUSTOMER, Permission.DEPOSIT_CREATE)
+    assert not has_permission(Role.CUSTOMER, Permission.DEPOSIT_CREATE)
     assert not has_permission(Role.CUSTOMER, Permission.MONITORING_READ)
     assert has_permission(Role.AUDITOR, Permission.MONITORING_READ)
     assert not has_permission(Role.AUDITOR, Permission.RISK_ASSESS)
