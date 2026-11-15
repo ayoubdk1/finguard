@@ -1,10 +1,12 @@
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError, IntegrityError, SQLAlchemyError
 
 from app.core.metrics import FRAUD_RISK_SCORE, TRANSFERS_TOTAL
 from app.db.models import (
@@ -21,7 +23,7 @@ from app.db.session import SessionLocal
 from app.schemas.deposit import DepositCreate
 from app.schemas.transfer import TransferCreate, TransferResponse
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
-from app.security.permissions import Permission, has_permission
+from app.security.permissions import Permission, Role, has_permission
 from app.services.fx import ExchangeRateNotFound, calculate_fx_conversion, get_latest_rate
 from app.services.ledger import (
     AccountNotFound,
@@ -36,6 +38,7 @@ from app.services.ledger import (
 )
 from app.services.limits import DailyLimitExceeded, TransactionLimitExceeded, check_transfer_limits
 from app.services.outbox import enqueue_transfer_posted
+from app.services.resilience import calculate_backoff_delay
 from app.services.risk_assessment import assess_transaction_risk
 
 logger = logging.getLogger("finguard.security")
@@ -188,304 +191,278 @@ def create_transfer(
     ),
     current_user: User = Depends(get_current_user),
 ):
-    if not has_permission(
-        current_user.role, Permission.TRANSFER_CREATE
-    ):
-        raise HTTPException(
-            status_code=403, detail="Insufficient permissions"
-        )
-    ensure_user_owns_account_id(
-        data.source_account_id, current_user, require_write=True
-    )
+    if not has_permission(current_user.role, Permission.TRANSFER_CREATE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    ensure_user_owns_account_id(data.source_account_id, current_user, require_write=True)
 
+    if data.source_account_id == data.destination_account_id:
+        raise HTTPException(status_code=400, detail="Cannot transfer to the same account")
+
+    tx_scope = f"{current_user.id}:POST:/transfers"
+    tx_hash = compute_request_hash({
+        "source_account_id": str(data.source_account_id),
+        "destination_account_id": str(data.destination_account_id),
+        "amount_cents": data.amount_cents,
+        "description": data.description,
+    })
+
+    # 1.4 Replay before account locks and limit checks
     with SessionLocal() as db:
-
-        # 1. Prevent transfer to the same account
-        if data.source_account_id == data.destination_account_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot transfer to the same account",
+        replay_tx = db.scalar(
+            select(Transaction).where(
+                Transaction.idempotency_scope == tx_scope,
+                Transaction.idempotency_key == idempotency_key,
             )
-
-        # 2. Lock both accounts once in deterministic UUID order (deadlock-free)
-        ordered_ids = sorted([data.source_account_id, data.destination_account_id])
-        locked_accounts = db.scalars(
-            select(Account)
-            .where(Account.id.in_(ordered_ids))
-            .order_by(Account.id)
-            .with_for_update()
-        ).all()
-        acct_map = {a.id: a for a in locked_accounts}
-        source = acct_map.get(data.source_account_id)
-        destination = acct_map.get(data.destination_account_id)
-
-        if source is None or destination is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Account not found",
-            )
-
-        # 3. Ensure both accounts are customer accounts
-        if (
-            source.account_type != AccountType.CUSTOMER
-            or destination.account_type != AccountType.CUSTOMER
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Transfers require customer accounts",
-            )
-
-        # 4b. Enforce currency-aware per-transaction and rolling 24-hour limits
-        try:
-            check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
-        except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=str(exc),
-            )
-
-        # 5. Post ledger transaction: Same-Currency vs Atomic Cross-Currency FX
-        is_fx = source.currency != destination.currency
-        converted_amount_cents = None
-        fee_cents = None
-        effective_rate = None
-        tx_scope = f"{current_user.id}:POST:/transfers"
-        tx_hash = compute_request_hash({
-            "source_account_id": str(data.source_account_id),
-            "destination_account_id": str(data.destination_account_id),
-            "amount_cents": data.amount_cents,
-            "description": data.description,
-        })
-
-        try:
-            if not is_fx:
-                tx = post_transaction(
-                    session=db,
-                    idempotency_key=idempotency_key,
-                    idempotency_scope=tx_scope,
-                    request_hash=tx_hash,
-                    entries=[
-                        EntryInput(source.id, -data.amount_cents),
-                        EntryInput(destination.id, data.amount_cents),
-                    ],
-                    description=data.description,
-                    before_commit=lambda session, tx: enqueue_transfer_posted(
-                        session=session,
-                        transaction_id=tx.id,
-                        source_account_id=source.id,
-                        destination_account_id=destination.id,
-                        amount_cents=data.amount_cents,
-                        currency=source.currency,
-                    ),
-                )
-            else:
-                try:
-                    fx_rate = get_latest_rate(db, source.currency, destination.currency)
-                except ExchangeRateNotFound as exc:
-                    raise HTTPException(status_code=400, detail=str(exc))
-
-                converted_amount_cents, fee_cents, effective_rate = calculate_fx_conversion(
-                    source_amount_cents=data.amount_cents,
-                    base_currency=source.currency,
-                    target_currency=destination.currency,
-                    rate_scaled=fx_rate.rate,
-                    fee_bps=fx_rate.fee_bps,
-                )
-
-                sys_fx_src = db.scalar(
-                    select(Account).where(Account.name == "SYSTEM_FX", Account.currency == source.currency)
-                )
-                sys_fx_dst = db.scalar(
-                    select(Account).where(Account.name == "SYSTEM_FX", Account.currency == destination.currency)
-                )
-                if sys_fx_src is None or sys_fx_dst is None:
-                    raise HTTPException(status_code=500, detail="SYSTEM_FX clearing account not configured")
-
-                tx = post_transaction(
-                    session=db,
-                    idempotency_key=idempotency_key,
-                    idempotency_scope=tx_scope,
-                    request_hash=tx_hash,
-                    entries=[
-                        EntryInput(source.id, -data.amount_cents),
-                        EntryInput(sys_fx_src.id, data.amount_cents),
-                    ],
-                    description=data.description,
-                    before_commit=lambda session, tx: enqueue_transfer_posted(
-                        session=session,
-                        transaction_id=tx.id,
-                        source_account_id=source.id,
-                        destination_account_id=destination.id,
-                        amount_cents=data.amount_cents,
-                        currency=source.currency,
-                    ),
-                    commit=False,
-                )
-
-                post_transaction(
-                    session=db,
-                    idempotency_key=f"{idempotency_key}:fx_delivery",
-                    idempotency_scope=f"{tx_scope}:fx_delivery",
-                    request_hash=tx_hash,
-                    entries=[
-                        EntryInput(sys_fx_dst.id, -converted_amount_cents),
-                        EntryInput(destination.id, converted_amount_cents),
-                    ],
-                    description=f"FX from {source.id} ({source.currency}->{destination.currency})",
-                    commit=False,
-                )
-                db.commit()
-
-        except IdempotencyConflict as exc:
-            db.rollback()
-            raise HTTPException(status_code=409, detail=str(exc))
-
-        except InsufficientFunds as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=str(exc),
-            )
-
-        except AccountNotFound as exc:
-            raise HTTPException(
-                status_code=404,
-                detail=str(exc),
-            )
-
-        except InvalidTransaction as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-            )
-
-        except LedgerError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=str(exc),
-            )
-
-        # 6. Verify idempotency key was not reused
-        # with different transaction details
-        rows = db.execute(
-            select(
-                LedgerEntry.account_id,
-                LedgerEntry.amount,
-            ).where(
-                LedgerEntry.transaction_id == tx.id
-            )
-        ).all()
-
-        actual_entries = {
-            (row[0], row[1])
-            for row in rows
-        }
-
-        if not is_fx:
-            expected_entries = {
-                (source.id, -data.amount_cents),
-                (destination.id, data.amount_cents),
-            }
-        else:
-            expected_entries = {
-                (source.id, -data.amount_cents),
-                (sys_fx_src.id, data.amount_cents),
+        )
+        if replay_tx is not None:
+            if replay_tx.request_hash is not None and replay_tx.request_hash != tx_hash:
+                raise HTTPException(status_code=409, detail="Idempotency key used for different transaction")
+            src_acct = db.get(Account, data.source_account_id)
+            dst_acct = db.get(Account, data.destination_account_id)
+            is_fx_replay = bool(src_acct and dst_acct and src_acct.currency != dst_acct.currency)
+            return {
+                "transaction_id": replay_tx.id,
+                "status": replay_tx.status,
+                "source_account_id": data.source_account_id,
+                "destination_account_id": data.destination_account_id,
+                "amount_cents": data.amount_cents,
+                "currency": src_acct.currency if src_acct else "USD",
+                "is_fx": is_fx_replay,
+                "target_currency": dst_acct.currency if (is_fx_replay and dst_acct) else None,
+                "converted_amount_cents": None,
+                "fee_cents": None,
+                "exchange_rate": None,
+                "source_balance_cents": get_balance(db, data.source_account_id),
+                "destination_balance_cents": get_balance(db, data.destination_account_id),
             }
 
-        if (
-            len(rows) != 2
-            or actual_entries != expected_entries
-            or tx.description != data.description
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Idempotency key used for different transaction",
-            )
+    # 1.1 Retry loop for Postgres deadlock (40P01) / serialization failure (40001)
+    max_db_attempts = 3
+    for attempt in range(1, max_db_attempts + 1):
+        with SessionLocal() as db:
+            try:
+                src_peek = db.get(Account, data.source_account_id)
+                dst_peek = db.get(Account, data.destination_account_id)
+                if src_peek is None or dst_peek is None:
+                    raise HTTPException(status_code=404, detail="Account not found")
 
-        # 6b. Server-side fraud risk assessment & automatic FraudAlert creation
-        now_utc = datetime.now(timezone.utc)
-        ten_min_ago = now_utc - timedelta(minutes=10)
-        one_hour_ago = now_utc - timedelta(hours=1)
-        transfers_10m = int(
-            db.scalar(
-                select(func.count())
-                .select_from(LedgerEntry)
-                .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
-                .where(
-                    LedgerEntry.account_id == source.id,
-                    LedgerEntry.amount < 0,
-                    Transaction.created_at >= ten_min_ago,
-                )
-            )
-            or 0
-        )
-        src_created = source.created_at
-        if src_created.tzinfo is None:
-            src_created = src_created.replace(tzinfo=timezone.utc)
-        account_age_min = max(0, int((now_utc - src_created).total_seconds() // 60))
-        failed_1h = int(
-            db.scalar(
-                select(func.count())
-                .select_from(LedgerEntry)
-                .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
-                .where(
-                    LedgerEntry.account_id == source.id,
-                    Transaction.status == TransactionStatus.FAILED,
-                    Transaction.created_at >= one_hour_ago,
-                )
-            )
-            or 0
-        )
-        risk = assess_transaction_risk(
-            amount_cents=data.amount_cents,
-            transfers_last_10min=transfers_10m,
-            account_age_minutes=account_age_min,
-            failed_transfers_last_hour=failed_1h,
-        )
-        FRAUD_RISK_SCORE.observe(float(risk.get("rules_risk_score", 0)))
-        TRANSFERS_TOTAL.labels(currency=source.currency, status="COMPLETED").inc()
-        if risk.get("review_recommended"):
-            existing_alert = db.scalar(
-                select(FraudAlert).where(FraudAlert.transaction_id == tx.id)
-            )
-            if existing_alert is None:
-                raw_score = risk.get("ml_probability")
-                if raw_score is None:
-                    raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
-                reasons = risk.get("reason_codes") or ["ML_ANOMALY"]
-                db.add(
-                    FraudAlert(
-                        transaction_id=tx.id,
-                        account_id=source.id,
-                        risk_score=int(round(float(raw_score) * 1000)),
-                        reasons=reasons,
-                        status=FraudAlertStatus.PENDING.value,
+                is_fx = src_peek.currency != dst_peek.currency
+                lock_ids = [data.source_account_id, data.destination_account_id]
+                sys_fx_src_id = None
+                sys_fx_dst_id = None
+                fx_rate = None
+                if is_fx:
+                    try:
+                        fx_rate = get_latest_rate(db, src_peek.currency, dst_peek.currency)
+                    except ExchangeRateNotFound as exc:
+                        raise HTTPException(status_code=400, detail=str(exc))
+                    fx_src_acct = db.scalar(
+                        select(Account).where(Account.name == "SYSTEM_FX", Account.currency == src_peek.currency)
                     )
+                    fx_dst_acct = db.scalar(
+                        select(Account).where(Account.name == "SYSTEM_FX", Account.currency == dst_peek.currency)
+                    )
+                    if fx_src_acct is None or fx_dst_acct is None:
+                        raise HTTPException(status_code=409, detail="SYSTEM_FX clearing account not configured")
+                    sys_fx_src_id = fx_src_acct.id
+                    sys_fx_dst_id = fx_dst_acct.id
+                    lock_ids.extend([sys_fx_src_id, sys_fx_dst_id])
+
+                # Lock all 2 or 4 accounts once in sorted UUID order
+                ordered_ids = sorted(set(lock_ids))
+                locked_accounts = db.scalars(
+                    select(Account)
+                    .where(Account.id.in_(ordered_ids))
+                    .order_by(Account.id)
+                    .with_for_update()
+                ).all()
+                acct_map = {a.id: a for a in locked_accounts}
+                source = acct_map[data.source_account_id]
+                destination = acct_map[data.destination_account_id]
+
+                if source.account_type != AccountType.CUSTOMER or destination.account_type != AccountType.CUSTOMER:
+                    raise HTTPException(status_code=400, detail="Transfers require customer accounts")
+
+                try:
+                    check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
+                except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc))
+
+                converted_amount_cents = None
+                fee_cents = None
+                effective_rate = None
+
+                if not is_fx:
+                    tx = post_transaction(
+                        session=db,
+                        idempotency_key=idempotency_key,
+                        idempotency_scope=tx_scope,
+                        request_hash=tx_hash,
+                        entries=[
+                            EntryInput(source.id, -data.amount_cents),
+                            EntryInput(destination.id, data.amount_cents),
+                        ],
+                        description=data.description,
+                        before_commit=lambda session, tx: enqueue_transfer_posted(
+                            session=session,
+                            transaction_id=tx.id,
+                            source_account_id=source.id,
+                            destination_account_id=destination.id,
+                            amount_cents=data.amount_cents,
+                            currency=source.currency,
+                        ),
+                    )
+                else:
+                    assert fx_rate is not None
+                    assert sys_fx_src_id is not None and sys_fx_dst_id is not None
+
+                    converted_amount_cents, fee_cents, effective_rate = calculate_fx_conversion(
+                        source_amount_cents=data.amount_cents,
+                        base_currency=source.currency,
+                        target_currency=destination.currency,
+                        rate_scaled=fx_rate.rate,
+                        fee_bps=fx_rate.fee_bps,
+                    )
+
+                    tx = post_transaction(
+                        session=db,
+                        idempotency_key=idempotency_key,
+                        idempotency_scope=tx_scope,
+                        request_hash=tx_hash,
+                        entries=[
+                            EntryInput(source.id, -data.amount_cents),
+                            EntryInput(sys_fx_src_id, data.amount_cents),
+                        ],
+                        description=data.description,
+                        before_commit=lambda session, tx: enqueue_transfer_posted(
+                            session=session,
+                            transaction_id=tx.id,
+                            source_account_id=source.id,
+                            destination_account_id=destination.id,
+                            amount_cents=data.amount_cents,
+                            currency=source.currency,
+                        ),
+                        commit=False,
+                    )
+                    post_transaction(
+                        session=db,
+                        idempotency_key=f"{idempotency_key}:fx_delivery",
+                        idempotency_scope=f"{tx_scope}:fx_delivery",
+                        request_hash=tx_hash,
+                        entries=[
+                            EntryInput(sys_fx_dst_id, -converted_amount_cents),
+                            EntryInput(destination.id, converted_amount_cents),
+                        ],
+                        description=f"FX from {source.id} ({source.currency}->{destination.currency})",
+                        commit=False,
+                    )
+                    db.commit()
+
+                # Fraud scoring & alert creation
+                now_utc = datetime.now(timezone.utc)
+                ten_min_ago = now_utc - timedelta(minutes=10)
+                one_hour_ago = now_utc - timedelta(hours=1)
+                transfers_10m = int(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(LedgerEntry)
+                        .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+                        .where(
+                            LedgerEntry.account_id == source.id,
+                            LedgerEntry.amount < 0,
+                            Transaction.created_at >= ten_min_ago,
+                        )
+                    )
+                    or 0
                 )
-                db.commit()
+                src_created = source.created_at
+                if src_created.tzinfo is None:
+                    src_created = src_created.replace(tzinfo=timezone.utc)
+                account_age_min = max(0, int((now_utc - src_created).total_seconds() // 60))
+                failed_1h = int(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(LedgerEntry)
+                        .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+                        .where(
+                            LedgerEntry.account_id == source.id,
+                            Transaction.status == TransactionStatus.FAILED,
+                            Transaction.created_at >= one_hour_ago,
+                        )
+                    )
+                    or 0
+                )
+                risk = assess_transaction_risk(
+                    amount_cents=data.amount_cents,
+                    transfers_last_10min=transfers_10m,
+                    account_age_minutes=account_age_min,
+                    failed_transfers_last_hour=failed_1h,
+                )
+                FRAUD_RISK_SCORE.observe(float(risk.get("rules_risk_score", 0)))
+                TRANSFERS_TOTAL.labels(currency=source.currency, status="COMPLETED").inc()
+                if risk.get("review_recommended"):
+                    existing_alert = db.scalar(
+                        select(FraudAlert).where(FraudAlert.transaction_id == tx.id)
+                    )
+                    if existing_alert is None:
+                        raw_score = risk.get("ml_probability")
+                        if raw_score is None:
+                            raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
+                        reasons = risk.get("reason_codes") or ["ML_ANOMALY"]
+                        db.add(
+                            FraudAlert(
+                                transaction_id=tx.id,
+                                account_id=source.id,
+                                risk_score=int(round(float(raw_score) * 1000)),
+                                reasons=reasons,
+                                status=FraudAlertStatus.PENDING.value,
+                            )
+                        )
+                        db.commit()
 
-        # 7. Return result
-        return {
-            "transaction_id": tx.id,
-            "status": tx.status,
-            "source_account_id": source.id,
-            "destination_account_id": destination.id,
-            "amount_cents": data.amount_cents,
-            "currency": source.currency,
-            "is_fx": is_fx,
-            "target_currency": destination.currency if is_fx else None,
-            "converted_amount_cents": converted_amount_cents,
-            "fee_cents": fee_cents,
-            "exchange_rate": float(effective_rate) if effective_rate else None,
-            "source_balance_cents": get_balance(
-                db,
-                source.id,
-            ),
-            "destination_balance_cents": get_balance(
-                db,
-                destination.id,
-            ),
-        }
+                return {
+                    "transaction_id": tx.id,
+                    "status": tx.status,
+                    "source_account_id": source.id,
+                    "destination_account_id": destination.id,
+                    "amount_cents": data.amount_cents,
+                    "currency": source.currency,
+                    "is_fx": is_fx,
+                    "target_currency": destination.currency if is_fx else None,
+                    "converted_amount_cents": converted_amount_cents,
+                    "fee_cents": fee_cents,
+                    "exchange_rate": float(effective_rate) if effective_rate else None,
+                    "source_balance_cents": get_balance(db, source.id),
+                    "destination_balance_cents": get_balance(db, destination.id),
+                }
 
+            except IdempotencyConflict as exc:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(exc))
+            except InsufficientFunds as exc:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(exc))
+            except AccountNotFound as exc:
+                db.rollback()
+                raise HTTPException(status_code=404, detail=str(exc))
+            except InvalidTransaction as exc:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=str(exc))
+            except LedgerError as exc:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(exc))
+            except DBAPIError as exc:
+                db.rollback()
+                sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+                if sqlstate in ("40P01", "40001") and attempt < max_db_attempts:
+                    time.sleep(calculate_backoff_delay(attempt, base_delay_seconds=0.02, max_delay_seconds=0.2, jitter_ratio=0.5))
+                    continue
+                if isinstance(exc, IntegrityError):
+                    raise HTTPException(status_code=409, detail="Transfer conflicted with a concurrent update") from exc
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable; please retry") from exc
+            except SQLAlchemyError as exc:
+                db.rollback()
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable; please retry") from exc
 
 @router.get("/fx/rates")
 def list_exchange_rates():
@@ -534,8 +511,34 @@ def refund_transfer(
         orig_dest_id = credit_entry.account_id
         transfer_amount = credit_entry.amount
 
-        # User must own original source account (or be ADMIN)
-        ensure_user_owns_account_id(orig_source_id, current_user, require_write=True)
+        if original_tx.original_transaction_id is not None:
+            raise HTTPException(status_code=409, detail="Cannot refund a refund transaction")
+
+        tx_created = original_tx.created_at
+        if tx_created.tzinfo is None:
+            tx_created = tx_created.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - tx_created) > timedelta(days=30):
+            raise HTTPException(status_code=422, detail="Refund window (30 days) has expired")
+
+        fx_leg_peek = db.scalar(
+            select(Transaction).where(
+                Transaction.idempotency_scope == f"{original_tx.idempotency_scope}:fx_delivery",
+                Transaction.idempotency_key == f"{original_tx.idempotency_key}:fx_delivery",
+            )
+        )
+        recipient_acct_id = orig_dest_id
+        if fx_leg_peek is not None:
+            fx_e = sorted(fx_leg_peek.entries, key=lambda e: e.amount)
+            if len(fx_e) == 2:
+                recipient_acct_id = fx_e[1].account_id
+
+        if current_user.role != Role.ADMIN:
+            recipient_acct = db.get(Account, recipient_acct_id)
+            if recipient_acct is None or recipient_acct.user_id != current_user.id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the recipient or an admin can refund this transfer",
+                )
 
         refund_scope = f"{current_user.id}:POST:/transfers/{transfer_id}/refund"
         refund_hash = compute_request_hash({"transfer_id": str(transfer_id)})
