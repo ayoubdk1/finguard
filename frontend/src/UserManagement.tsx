@@ -51,7 +51,8 @@ export function UserManagement() {
         if (active) setUsers(list)
       })
       .catch((err) => {
-        if (active) setError(err instanceof Error ? err.message : 'Erreur de chargement')
+        if (active)
+          setError(err instanceof Error ? err.message : 'Erreur de chargement')
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -66,19 +67,30 @@ export function UserManagement() {
     setError(null)
     setSuccessMsg(null)
     try {
-      await createAdminUser({ email, full_name: fullName, password, role, status: 'ACTIVE' })
+      await createAdminUser({
+        email,
+        full_name: fullName,
+        password,
+        role,
+        status: 'ACTIVE',
+      })
       setEmail('')
       setFullName('')
       setPassword('')
       setRole('CUSTOMER')
-      setSuccessMsg('Utilisateur cr?? avec succ?s.')
+      setSuccessMsg('Utilisateur créé avec succès.')
       await loadUsers()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur lors de la cr?ation')
+      setError(
+        err instanceof Error ? err.message : 'Erreur lors de la création'
+      )
     }
   }
 
-  const handleStatusChange = async (user: AdminUser, nextStatus: UserStatus) => {
+  const handleStatusChange = async (
+    user: AdminUser,
+    nextStatus: UserStatus
+  ) => {
     setError(null)
     setSuccessMsg(null)
     try {
@@ -89,9 +101,11 @@ export function UserManagement() {
         const s = await getAdminUserSessions(updated.id)
         setSessions(s.sessions)
       }
-      setSuccessMsg(`Statut de ${updated.email} mis ? jour : ${updated.status}`)
+      setSuccessMsg(
+        `Statut de ${updated.email} mis à jour : ${updated.status}`
+      )
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur de mise ? jour')
+      setError(err instanceof Error ? err.message : 'Erreur de mise à jour')
     }
   }
 
@@ -101,9 +115,9 @@ export function UserManagement() {
     try {
       const updated = await updateAdminUser(user.id, { role: nextRole })
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
-      setSuccessMsg(`R?le de ${updated.email} mis ? jour : ${updated.role}`)
+      setSuccessMsg(`Rôle de ${updated.email} mis à jour : ${updated.role}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur de mise ? jour')
+      setError(err instanceof Error ? err.message : 'Erreur de mise à jour')
     }
   }
 
@@ -118,7 +132,9 @@ export function UserManagement() {
       setHistory(h)
       setSessions(s.sessions)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Impossible de charger les d?tails')
+      setError(
+        err instanceof Error ? err.message : 'Impossible de charger les détails'
+      )
     }
   }
 
@@ -130,11 +146,17 @@ export function UserManagement() {
     try {
       await resetAdminUserPassword(selectedUser.id, resetPwValue)
       setResetPwValue('')
-      setSuccessMsg(`Mot de passe r?initialis? pour ${selectedUser.email} (sessions r?voqu?es).`)
+      setSuccessMsg(
+        `Mot de passe réinitialisé pour ${selectedUser.email} (sessions révoquées).`
+      )
       const s = await getAdminUserSessions(selectedUser.id)
       setSessions(s.sessions)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur lors de la r?initialisation')
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Erreur lors de la réinitialisation'
+      )
     }
   }
 
@@ -144,104 +166,174 @@ export function UserManagement() {
       await revokeAdminUserSession(selectedUser.id, sessionId)
       const s = await getAdminUserSessions(selectedUser.id)
       setSessions(s.sessions)
-      setSuccessMsg('Session r?voqu?e.')
+      setSuccessMsg('Session révoquée.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur lors de la r?vocation')
+      setError(
+        err instanceof Error ? err.message : 'Erreur lors de la révocation'
+      )
     }
   }
 
-  const cardStyle: React.CSSProperties = {
-    background: '#0f172a',
-    border: '1px solid #1e293b',
-    borderRadius: '10px',
-    padding: '20px',
-    marginBottom: '20px',
-    color: '#e2e8f0',
-  }
-
-  const inputStyle: React.CSSProperties = {
-    padding: '8px 10px',
-    borderRadius: '6px',
-    border: '1px solid #334155',
-    background: '#1e293b',
-    color: '#fff',
-    fontSize: '13px',
-  }
-
   return (
-    <section style={{ padding: '8px 0' }}>
+    <section className="admin-page">
       {error && (
-        <div style={{ padding: '12px', marginBottom: '16px', background: '#451a1a', border: '1px solid #dc2626', borderRadius: '6px', color: '#fca5a5' }}>
+        <div className="auth-alert-error" role="alert">
           {error}
         </div>
       )}
       {successMsg && (
-        <div style={{ padding: '12px', marginBottom: '16px', background: '#064e3b', border: '1px solid #10b981', borderRadius: '6px', color: '#a7f3d0' }}>
+        <div className="auth-alert-info" role="status">
           {successMsg}
         </div>
       )}
 
-      <div style={cardStyle}>
-        <h3 style={{ marginTop: 0, marginBottom: '14px' }}>Cr?er un compte utilisateur (Admin uniquement)</h3>
-        <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', alignItems: 'end' }}>
-          <input type="email" required placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
-          <input type="text" required placeholder="Nom complet" value={fullName} onChange={(e) => setFullName(e.target.value)} style={inputStyle} />
-          <input type="password" required minLength={12} placeholder="Mot de passe (12+ car.)" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-          <select value={role} onChange={(e) => setRole(e.target.value as UserRole)} style={inputStyle}>
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h3>Créer un compte utilisateur (Admin uniquement)</h3>
+            <p>Provisionner un nouvel accès RBAC sécurisé</p>
+          </div>
+          <span className="panel-tag">RBAC ADMIN</span>
+        </div>
+
+        <form onSubmit={handleCreateUser} className="admin-create-grid">
+          <input
+            type="email"
+            required
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="admin-input"
+          />
+          <input
+            type="text"
+            required
+            placeholder="Nom complet"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            className="admin-input"
+          />
+          <input
+            type="password"
+            required
+            minLength={12}
+            placeholder="Mot de passe (12+ car.)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="admin-input"
+          />
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as UserRole)}
+            className="admin-select"
+          >
             <option value="CUSTOMER">CUSTOMER</option>
             <option value="FRAUD_ANALYST">FRAUD_ANALYST</option>
             <option value="AUDITOR">AUDITOR</option>
             <option value="ADMIN">ADMIN</option>
           </select>
-          <button type="submit" style={{ padding: '9px 14px', borderRadius: '6px', border: 'none', background: '#2563eb', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>
-            + Cr?er
+          <button type="submit" className="primary-button">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Créer
           </button>
         </form>
       </div>
 
-      <div style={cardStyle}>
-        <h3 style={{ marginTop: 0, marginBottom: '14px' }}>Utilisateurs ({users.length})</h3>
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h3>Utilisateurs ({users.length})</h3>
+            <p>Contrôle des rôles, statuts et sessions actives</p>
+          </div>
+        </div>
+
         {loading ? (
-          <p>Chargement...</p>
+          <p className="events-message">Chargement...</p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+          <div className="table-wrapper">
+            <table>
               <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #334155', color: '#94a3b8' }}>
-                  <th style={{ padding: '8px' }}>Email</th>
-                  <th style={{ padding: '8px' }}>Nom</th>
-                  <th style={{ padding: '8px' }}>R?le</th>
-                  <th style={{ padding: '8px' }}>Statut</th>
-                  <th style={{ padding: '8px' }}>Actions</th>
+                <tr>
+                  <th>Email</th>
+                  <th>Nom</th>
+                  <th>Rôle</th>
+                  <th>Statut</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {users.map((u) => (
-                  <tr key={u.id} style={{ borderBottom: '1px solid #1e293b' }}>
-                    <td style={{ padding: '8px' }}>{u.email}</td>
-                    <td style={{ padding: '8px' }}>{u.full_name}</td>
-                    <td style={{ padding: '8px' }}>
-                      <select value={u.role} onChange={(e) => void handleRoleChange(u, e.target.value as UserRole)} style={inputStyle}>
+                  <tr key={u.id}>
+                    <td>
+                      <strong style={{ color: 'var(--color-foreground)' }}>
+                        {u.email}
+                      </strong>
+                    </td>
+                    <td>{u.full_name}</td>
+                    <td>
+                      <select
+                        value={u.role}
+                        onChange={(e) =>
+                          void handleRoleChange(u, e.target.value as UserRole)
+                        }
+                        className="admin-select"
+                        style={{ maxWidth: '170px' }}
+                      >
                         <option value="CUSTOMER">CUSTOMER</option>
                         <option value="FRAUD_ANALYST">FRAUD_ANALYST</option>
                         <option value="AUDITOR">AUDITOR</option>
                         <option value="ADMIN">ADMIN</option>
                       </select>
                     </td>
-                    <td style={{ padding: '8px' }}>
-                      <select value={u.status} onChange={(e) => void handleStatusChange(u, e.target.value as UserStatus)} style={inputStyle}>
+                    <td>
+                      <select
+                        value={u.status}
+                        onChange={(e) =>
+                          void handleStatusChange(
+                            u,
+                            e.target.value as UserStatus
+                          )
+                        }
+                        className="admin-select"
+                        style={{ maxWidth: '150px' }}
+                      >
                         <option value="ACTIVE">ACTIVE</option>
                         <option value="SUSPENDED">SUSPENDED</option>
                         <option value="DISABLED">DISABLED</option>
                       </select>
                     </td>
-                    <td style={{ padding: '8px' }}>
+                    <td>
                       <button
                         type="button"
                         onClick={() => void inspectUser(u)}
-                        style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #334155', background: '#1e293b', color: '#38bdf8', cursor: 'pointer' }}
+                        className="admin-action-btn"
                       >
-                        S?curit? / Sessions
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                        Sécurité / Sessions
                       </button>
                     </td>
                   </tr>
@@ -253,53 +345,116 @@ export function UserManagement() {
       </div>
 
       {selectedUser && (
-        <div style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>D?tails s?curit? : {selectedUser.email}</h3>
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <h3>Détails sécurité : {selectedUser.email}</h3>
+              <p>Réinitialisation de mot de passe, sessions et audit de connexion</p>
+            </div>
+          </div>
 
-          <form onSubmit={handleAdminResetPassword} style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <form
+            onSubmit={handleAdminResetPassword}
+            style={{
+              display: 'flex',
+              gap: '10px',
+              marginBottom: '24px',
+              flexWrap: 'wrap',
+            }}
+          >
             <input
               type="password"
               required
               minLength={12}
-              placeholder="Nouveau mot de passe (12+ caract?res)"
+              placeholder="Nouveau mot de passe (12+ caractères)"
               value={resetPwValue}
               onChange={(e) => setResetPwValue(e.target.value)}
-              style={{ ...inputStyle, minWidth: '260px' }}
+              className="admin-input"
+              style={{ maxWidth: '300px' }}
             />
-            <button type="submit" style={{ padding: '8px 14px', borderRadius: '6px', border: 'none', background: '#d97706', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>
-              R?initialiser le mot de passe
+            <button type="submit" className="admin-warning-btn">
+              Réinitialiser le mot de passe
             </button>
           </form>
 
-          <h4>Sessions actives ({sessions.length})</h4>
+          <h4
+            style={{
+              fontSize: '13px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: 'var(--color-muted-foreground)',
+              marginBottom: '10px',
+            }}
+          >
+            Sessions actives ({sessions.length})
+          </h4>
           {sessions.length === 0 ? (
-            <p style={{ color: '#94a3b8', fontSize: '13px' }}>Aucune session active.</p>
+            <p
+              style={{
+                color: 'var(--color-muted-foreground)',
+                fontSize: '13px',
+                marginBottom: '20px',
+              }}
+            >
+              Aucune session active.
+            </p>
           ) : (
-            <ul style={{ listStyle: 'none', padding: 0, marginBottom: '20px' }}>
+            <ul className="admin-list">
               {sessions.map((s) => (
-                <li key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: '1px solid #1e293b', fontSize: '13px' }}>
-                  <span>IP: {s.ip_address || 'N/A'} ? {s.user_agent || 'Client'}</span>
+                <li key={s.id} className="admin-list-item">
+                  <span>
+                    IP: {s.ip_address || 'N/A'} — {s.user_agent || 'Client'}
+                  </span>
                   <button
                     type="button"
                     onClick={() => void handleRevokeSession(s.id)}
-                    style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', background: '#dc2626', color: '#fff', cursor: 'pointer' }}
+                    className="admin-danger-btn"
                   >
-                    R?voquer
+                    Révoquer
                   </button>
                 </li>
               ))}
             </ul>
           )}
 
-          <h4>Historique des connexions ({history.length})</h4>
+          <h4
+            style={{
+              fontSize: '13px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: 'var(--color-muted-foreground)',
+              marginBottom: '10px',
+            }}
+          >
+            Historique des connexions ({history.length})
+          </h4>
           {history.length === 0 ? (
-            <p style={{ color: '#94a3b8', fontSize: '13px' }}>Aucune tentative enregistr?e.</p>
+            <p
+              style={{
+                color: 'var(--color-muted-foreground)',
+                fontSize: '13px',
+              }}
+            >
+              Aucune tentative enregistrée.
+            </p>
           ) : (
-            <ul style={{ listStyle: 'none', padding: 0 }}>
+            <ul className="admin-list" style={{ marginBottom: 0 }}>
               {history.map((h) => (
-                <li key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #1e293b', fontSize: '13px', color: h.success ? '#86efac' : '#fca5a5' }}>
-                  [{h.success ? 'SUCC?S' : '?CHEC'}] {new Date(h.created_at).toLocaleString()} ? IP: {h.ip_address || 'N/A'}
-                  {h.failure_reason ? ` (${h.failure_reason})` : ''}
+                <li
+                  key={h.id}
+                  className="admin-list-item"
+                  style={{
+                    color: h.success
+                      ? 'var(--color-success)'
+                      : 'var(--color-destructive)',
+                  }}
+                >
+                  <span>
+                    [{h.success ? 'SUCCÈS' : 'ÉCHEC'}]{' '}
+                    {new Date(h.created_at).toLocaleString()} — IP:{' '}
+                    {h.ip_address || 'N/A'}
+                    {h.failure_reason ? ` (${h.failure_reason})` : ''}
+                  </span>
                 </li>
               ))}
             </ul>

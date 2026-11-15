@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 
 import { LoginForm } from './LoginForm'
 import { UserManagement } from './UserManagement'
@@ -42,17 +42,142 @@ const customerAccounts = [
 ]
 
 // ============================================
+// CRISP VECTOR SVG ICONS (LUCIDE / HEROICONS)
+// ============================================
+
+const Icons: Record<string, ReactNode> = {
+  Dashboard: (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="7" height="9" x="3" y="3" rx="1" />
+      <rect width="7" height="5" x="14" y="3" rx="1" />
+      <rect width="7" height="9" x="14" y="12" rx="1" />
+      <rect width="7" height="5" x="3" y="16" rx="1" />
+    </svg>
+  ),
+  Accounts: (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
+      <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+    </svg>
+  ),
+  Transfers: (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3 4 7l4 4" />
+      <path d="M4 7h16" />
+      <path d="m16 21 4-4-4-4" />
+      <path d="M20 17H4" />
+    </svg>
+  ),
+  Transactions: (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z" />
+      <path d="M6 9.01V9" />
+      <path d="m15 5 6.3 6.3a2.4 2.4 0 0 1 0 3.4L17 19" />
+    </svg>
+  ),
+  'Fraud Detection': (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
+  'Event Monitoring': (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  Users: (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+}
+
+// ============================================
 // SIDEBAR MENU
 // ============================================
 
 const menuItems = [
-  { icon: '▦', label: 'Dashboard' },
-  { icon: '▤', label: 'Accounts' },
-  { icon: '⇄', label: 'Transfers' },
-  { icon: '≡', label: 'Transactions' },
-  { icon: '◇', label: 'Fraud Detection' },
-  { icon: '◉', label: 'Event Monitoring' },
-  { icon: '\u25ce', label: 'Users' },
+  { label: 'Dashboard' },
+  { label: 'Accounts' },
+  { label: 'Transfers' },
+  { label: 'Transactions' },
+  { label: 'Fraud Detection' },
+  { label: 'Event Monitoring' },
+  { label: 'Users' },
 ]
 
 type AccountMovement = TransactionHistoryItem & {
@@ -149,7 +274,6 @@ function readPendingTransfer(): PendingTransfer | null {
     }
 
     return data
-
   } catch {
     return null
   }
@@ -158,10 +282,18 @@ function readPendingTransfer(): PendingTransfer | null {
 function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
 
   useEffect(() => {
     async function checkAuth() {
-      if (typeof window !== 'undefined' && window.localStorage?.getItem('finguard_access_token')) {
+      if (
+        typeof window !== 'undefined' &&
+        window.localStorage?.getItem('finguard_access_token')
+      ) {
         try {
           const user = await getCurrentUser()
           setCurrentUser(user)
@@ -302,9 +434,7 @@ function App() {
           setBalances(results)
           setBalanceError('')
         }
-
       } catch (error) {
-
         if (!cancelled) {
           setBalanceError(
             error instanceof Error
@@ -334,7 +464,6 @@ function App() {
       setHistoryError('')
 
       try {
-
         const response = await getAccountTransactions(
           ALICE_ACCOUNT_ID
         )
@@ -343,9 +472,7 @@ function App() {
           setTransactions(response.transactions)
           setHistoryError('')
         }
-
       } catch (error) {
-
         if (!cancelled) {
           setHistoryError(
             error instanceof Error
@@ -353,9 +480,7 @@ function App() {
               : 'Failed to load transactions'
           )
         }
-
       } finally {
-
         if (!cancelled) {
           setHistoryLoading(false)
         }
@@ -420,10 +545,11 @@ function App() {
   const visibleMovements = allMovements.filter((tx) => {
     if (movementFilter === 'all') return true
 
-    return tx.accountId === (
-      movementFilter === 'alice'
+    return (
+      tx.accountId ===
+      (movementFilter === 'alice'
         ? ALICE_ACCOUNT_ID
-        : BOB_ACCOUNT_ID
+        : BOB_ACCOUNT_ID)
     )
   })
 
@@ -442,7 +568,6 @@ function App() {
   }
 
   function openTransferModal() {
-
     // Check whether an earlier request is unresolved
     const saved = pendingTransfer ?? readPendingTransfer()
 
@@ -552,7 +677,6 @@ function App() {
       let attempt = pendingTransfer
 
       if (!attempt) {
-
         attempt = {
           key: transferRequestKey,
 
@@ -603,24 +727,25 @@ function App() {
       setMovementsRefreshKey((current) => current + 1)
 
       // 3. Immediately update displayed balances
-      setBalances((current) =>
-        current?.map((account) => {
-          if (account.account_id === result.source_account_id) {
-            return {
-              ...account,
-              balance_cents: result.source_balance_cents,
+      setBalances(
+        (current) =>
+          current?.map((account) => {
+            if (account.account_id === result.source_account_id) {
+              return {
+                ...account,
+                balance_cents: result.source_balance_cents,
+              }
             }
-          }
 
-          if (account.account_id === result.destination_account_id) {
-            return {
-              ...account,
-              balance_cents: result.destination_balance_cents,
+            if (account.account_id === result.destination_account_id) {
+              return {
+                ...account,
+                balance_cents: result.destination_balance_cents,
+              }
             }
-          }
 
-          return account
-        }) ?? null
+            return account
+          }) ?? null
       )
 
       setBalanceError('')
@@ -657,7 +782,6 @@ function App() {
       } finally {
         setHistoryLoading(false)
       }
-
     } catch (error) {
       setTransferFormError(
         error instanceof Error
@@ -741,14 +865,12 @@ function App() {
       })
 
       setRiskResult(result)
-
     } catch (error) {
       setRiskError(
         error instanceof Error
           ? error.message
           : 'Fraud assessment failed.'
       )
-
     } finally {
       setRiskLoading(false)
     }
@@ -811,7 +933,6 @@ function App() {
   // ============================================
 
   function refreshDashboardData() {
-
     // Reload balances and dashboard transactions
     setOverviewRefreshKey((current) => current + 1)
 
@@ -828,34 +949,51 @@ function App() {
 
   if (authLoading && import.meta.env.MODE !== 'test') {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#020617', color: '#94a3b8' }}>
-        V?rification de la session...
+      <div className="auth-loading-screen">
+        Vérification de la session...
       </div>
     )
   }
 
   if (!currentUser && import.meta.env.MODE !== 'test') {
-    return <LoginForm onSuccess={async () => {
-      try {
-        const u = await getCurrentUser()
-        setCurrentUser(u)
-      } catch {
-        // ignore
-      }
-    }} />
+    return (
+      <LoginForm
+        onSuccess={async () => {
+          try {
+            const u = await getCurrentUser()
+            setCurrentUser(u)
+          } catch {
+            // ignore
+          }
+        }}
+      />
+    )
   }
 
   return (
     <div className="app-layout">
-
       {/* ===================================== */}
       {/* SIDEBAR */}
       {/* ===================================== */}
 
       <aside className="sidebar">
-
         <div className="brand">
-          <div className="brand-icon">F</div>
+          <div className="brand-icon" aria-hidden="true">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          </div>
 
           <div>
             <h2>FinGuard</h2>
@@ -864,11 +1002,9 @@ function App() {
         </div>
 
         <div className="sidebar-section">
-
           <p className="section-label">WORKSPACE</p>
 
           <nav aria-label="Main navigation">
-
             {menuItems.map((item) => {
               const available =
                 item.label === 'Dashboard' ||
@@ -905,31 +1041,29 @@ function App() {
                     }
                   }}
                 >
-                  <span className="menu-icon">{item.icon}</span>
+                  <span className="menu-icon">{Icons[item.label]}</span>
                   <span>{item.label}</span>
 
                   {!available && <small>Soon</small>}
                 </button>
               )
             })}
-
           </nav>
-
         </div>
 
         <div className="sidebar-bottom">
           {currentUser ? (
-            <div style={{ marginBottom: '12px', padding: '10px', background: '#1e293b', borderRadius: '8px', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div className="sidebar-user-card">
+              <div className="sidebar-user-name">
                 {currentUser.full_name}
               </div>
-              <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '2px' }}>
+              <div className="sidebar-user-role">
                 {currentUser.role}
               </div>
               <button
                 type="button"
                 onClick={handleLogout}
-                style={{ marginTop: '8px', width: '100%', padding: '6px', background: '#334155', border: 'none', borderRadius: '4px', color: '#cbd5e1', fontSize: '12px', cursor: 'pointer' }}
+                className="sidebar-logout-btn"
               >
                 Se déconnecter
               </button>
@@ -942,9 +1076,7 @@ function App() {
           )}
 
           <p>FinGuard v0.1</p>
-
         </div>
-
       </aside>
 
       {/* ===================================== */}
@@ -952,11 +1084,9 @@ function App() {
       {/* ===================================== */}
 
       <main className="main-content">
-
         {/* HEADER */}
 
         <header className="topbar">
-
           <div>
             <span className="breadcrumb">
               Workspace / {activePage}
@@ -964,15 +1094,53 @@ function App() {
           </div>
 
           <div className="topbar-right">
+            <button
+              type="button"
+              className="theme-toggle-btn"
+              onClick={() =>
+                setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+              }
+              aria-label="Toggle color theme"
+            >
+              {theme === 'dark' ? (
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                </svg>
+              )}
+              <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
 
             <span className="demo-badge">
-              {currentUser ? `\u25cf ${currentUser.role}` : '\u25cf PRIVATE'}
+              {currentUser ? currentUser.role : 'PRIVATE'}
             </span>
 
             <div className="avatar">FG</div>
-
           </div>
-
         </header>
 
         {/* ===================================== */}
@@ -980,7 +1148,6 @@ function App() {
         {/* ===================================== */}
 
         <section className="page-heading">
-
           <div>
             <p className="eyebrow">
               {activePage === 'Dashboard'
@@ -992,8 +1159,8 @@ function App() {
                     : activePage === 'Fraud Detection'
                       ? 'FRAUD INTELLIGENCE'
                       : activePage === 'Users'
-                      ? 'ADMINISTRATION'
-                      : 'EVENT-DRIVEN ARCHITECTURE'}
+                        ? 'ADMINISTRATION'
+                        : 'EVENT-DRIVEN ARCHITECTURE'}
             </p>
 
             <h1>{activePage}</h1>
@@ -1008,19 +1175,34 @@ function App() {
                     : activePage === 'Fraud Detection'
                       ? 'Analyze transaction risk using rules and machine learning.'
                       : activePage === 'Users'
-                      ? 'Manage user accounts, statuses, login history, and active sessions.'
-                      : 'Monitor transactional outbox events and consumer processing.'}
+                        ? 'Manage user accounts, statuses, login history, and active sessions.'
+                        : 'Monitor transactional outbox events and consumer processing.'}
             </p>
           </div>
 
           <div className="page-actions">
-
             <button
               type="button"
               className="secondary-button"
               onClick={refreshDashboardData}
             >
-              ↻ Refresh Data
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 16h5v5" />
+              </svg>
+              Refresh Data
             </button>
 
             <button
@@ -1028,11 +1210,22 @@ function App() {
               className="primary-button"
               onClick={openTransferModal}
             >
-              + New Transfer
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New Transfer
             </button>
-
           </div>
-
         </section>
 
         {/* ===================================== */}
@@ -1041,332 +1234,276 @@ function App() {
 
         {activePage === 'Dashboard' && (
           <>
-          <section className="stats-grid">
+            <section className="stats-grid">
+              {/* TOTAL BALANCE */}
 
-          {/* TOTAL BALANCE */}
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Total Balance</span>
+                  <span className="stat-icon" aria-hidden="true">
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" x2="12" y1="2" y2="22" />
+                      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                    </svg>
+                  </span>
+                </div>
 
-          <div className="stat-card">
-
-            <div className="stat-top">
-              <span>Total Balance</span>
-              <span className="stat-icon">◎</span>
-            </div>
-
-            <h2>
-              {balances
-                ? totalBalanceCents?.toLocaleString('en-US')
-                : balanceError
-                  ? 'Unavailable'
-                  : 'Loading...'
-              }
-
-              {' '}
-
-              <small>cents</small>
-            </h2>
-
-            <p>
-              {balanceError
-                ? 'Could not load balances from FastAPI'
-                : balances
-                  ? 'Live balance — Alice and Bob'
-                  : 'Connecting to PostgreSQL...'
-              }
-            </p>
-
-          </div>
-
-          {/* CUSTOMER ACCOUNTS */}
-
-          <div className="stat-card">
-
-            <div className="stat-top">
-              <span>Customer Accounts</span>
-              <span className="stat-icon">▣</span>
-            </div>
-
-            <h2>2</h2>
-
-            <p>Selected customer accounts</p>
-
-          </div>
-
-          {/* RECENT TRANSACTIONS */}
-
-          <div className="stat-card">
-
-            <div className="stat-top">
-              <span>Recent Transactions</span>
-              <span className="stat-icon">⇄</span>
-            </div>
-
-            <h2>
-              {historyLoading
-                ? '...'
-                : historyError
-                  ? '—'
-                  : transactions.length
-              }
-            </h2>
-
-            <p>
-              {historyError
-                ? 'Transaction history unavailable'
-                : "Alice's account activity"
-              }
-            </p>
-
-          </div>
-
-          {/* FRAUD MONITORING */}
-
-          <div className="stat-card">
-
-            <div className="stat-top">
-              <span>Fraud Monitoring</span>
-              <span className="stat-icon">◇</span>
-            </div>
-
-            <h2 className="green-text">
-              Enabled
-            </h2>
-
-            <p>Rules + ML prototype</p>
-
-          </div>
-
-        </section>
-
-        {/* ===================================== */}
-        {/* DASHBOARD GRID */}
-        {/* ===================================== */}
-
-        <section className="dashboard-grid">
-
-          {/* ===================================== */}
-          {/* REAL TRANSACTION HISTORY */}
-          {/* ===================================== */}
-
-          <div className="panel transactions-panel">
-
-            <div className="panel-header">
-
-              <div>
-                <h3>Recent Transactions</h3>
+                <h2>
+                  {balances
+                    ? totalBalanceCents?.toLocaleString('en-US')
+                    : balanceError
+                      ? 'Unavailable'
+                      : 'Loading...'}{' '}
+                  <small>cents</small>
+                </h2>
 
                 <p>
-                  Live transaction history — Alice's account
+                  {balanceError
+                    ? 'Could not load balances from FastAPI'
+                    : balances
+                      ? 'Live balance — Alice and Bob'
+                      : 'Connecting to PostgreSQL...'}
                 </p>
               </div>
 
-              <span className="panel-tag">
-                {historyLoading
-                  ? 'LOADING'
-                  : historyError
-                    ? 'API ERROR'
-                    : 'LIVE DATA'
-                }
-              </span>
+              {/* CUSTOMER ACCOUNTS */}
 
-            </div>
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Customer Accounts</span>
+                  <span className="stat-icon" aria-hidden="true">
+                    {Icons.Accounts}
+                  </span>
+                </div>
 
-            <div className="table-wrapper">
+                <h2>2</h2>
 
-              <table>
+                <p>Selected customer accounts</p>
+              </div>
 
-                <thead>
-                  <tr>
-                    <th>TRANSACTION</th>
-                    <th>DATE</th>
-                    <th>AMOUNT</th>
-                    <th>STATUS</th>
-                  </tr>
-                </thead>
+              {/* RECENT TRANSACTIONS */}
 
-                <tbody>
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Recent Transactions</span>
+                  <span className="stat-icon" aria-hidden="true">
+                    {Icons.Transfers}
+                  </span>
+                </div>
 
-                  {historyLoading ? (
+                <h2>
+                  {historyLoading
+                    ? '...'
+                    : historyError
+                      ? '—'
+                      : transactions.length}
+                </h2>
 
-                    <tr>
-                      <td colSpan={4}>
-                        Loading transactions...
-                      </td>
-                    </tr>
+                <p>
+                  {historyError
+                    ? 'Transaction history unavailable'
+                    : "Alice's account activity"}
+                </p>
+              </div>
 
-                  ) : historyError ? (
+              {/* FRAUD MONITORING */}
 
-                    <tr>
-                      <td colSpan={4}>
-                        Unable to load transaction history.
-                      </td>
-                    </tr>
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Fraud Monitoring</span>
+                  <span className="stat-icon" aria-hidden="true">
+                    {Icons['Fraud Detection']}
+                  </span>
+                </div>
 
-                  ) : transactions.length === 0 ? (
+                <h2 className="green-text">Enabled</h2>
 
-                    <tr>
-                      <td colSpan={4}>
-                        No transactions found.
-                      </td>
-                    </tr>
+                <p>Rules + ML prototype</p>
+              </div>
+            </section>
 
-                  ) : (
+            {/* ===================================== */}
+            {/* DASHBOARD GRID */}
+            {/* ===================================== */}
 
-                    transactions.slice(0, 5).map((tx) => (
+            <section className="dashboard-grid">
+              {/* ===================================== */}
+              {/* REAL TRANSACTION HISTORY */}
+              {/* ===================================== */}
 
-                      <tr key={tx.transaction_id}>
+              <div className="panel transactions-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Recent Transactions</h3>
 
-                        <td>
+                    <p>Live transaction history — Alice&apos;s account</p>
+                  </div>
 
-                          <div className="transaction-name">
-                            {tx.description || 'Financial transaction'}
-                          </div>
+                  <span className="panel-tag">
+                    {historyLoading
+                      ? 'LOADING'
+                      : historyError
+                        ? 'API ERROR'
+                        : 'LIVE DATA'}
+                  </span>
+                </div>
 
-                          <span className="transaction-id">
-                            {tx.transaction_id.slice(0, 8)}
-                          </span>
-
-                        </td>
-
-                        <td>
-
-                          {new Date(tx.created_at).toLocaleDateString(
-                            'en-GB',
-                            {
-                              day: '2-digit',
-                              month: 'short',
-                              year: 'numeric',
-                            }
-                          )}
-
-                        </td>
-
-                        <td className="amount-cell">
-
-                          {tx.amount_cents > 0 ? '+' : ''}
-
-                          {tx.amount_cents.toLocaleString('en-US')}
-
-                          {' cents'}
-
-                        </td>
-
-                        <td>
-
-                          <span className="status-badge">
-                            {tx.status}
-                          </span>
-
-                        </td>
-
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TRANSACTION</th>
+                        <th>DATE</th>
+                        <th>AMOUNT</th>
+                        <th>STATUS</th>
                       </tr>
+                    </thead>
 
-                    ))
+                    <tbody>
+                      {historyLoading ? (
+                        <tr>
+                          <td colSpan={4}>Loading transactions...</td>
+                        </tr>
+                      ) : historyError ? (
+                        <tr>
+                          <td colSpan={4}>
+                            Unable to load transaction history.
+                          </td>
+                        </tr>
+                      ) : transactions.length === 0 ? (
+                        <tr>
+                          <td colSpan={4}>No transactions found.</td>
+                        </tr>
+                      ) : (
+                        transactions.slice(0, 5).map((tx) => (
+                          <tr key={tx.transaction_id}>
+                            <td>
+                              <div className="transaction-name">
+                                {tx.description || 'Financial transaction'}
+                              </div>
 
-                  )}
+                              <span className="transaction-id">
+                                {tx.transaction_id.slice(0, 8)}
+                              </span>
+                            </td>
 
-                </tbody>
+                            <td>
+                              {new Date(tx.created_at).toLocaleDateString(
+                                'en-GB',
+                                {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                }
+                              )}
+                            </td>
 
-              </table>
+                            <td className="amount-cell">
+                              {tx.amount_cents > 0 ? '+' : ''}
+                              {tx.amount_cents.toLocaleString('en-US')}
+                              {' cents'}
+                            </td>
 
-            </div>
-
-          </div>
-
-          {/* ===================================== */}
-          {/* RIGHT PANELS */}
-          {/* ===================================== */}
-
-          <div className="side-panels">
-
-            {/* FRAUD INTELLIGENCE */}
-
-            <div className="panel">
-
-              <div className="panel-header">
-
-                <div>
-                  <h3>Fraud Intelligence</h3>
-                  <p>Risk assessment engine</p>
+                            <td>
+                              <span className="status-badge">
+                                {tx.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-
               </div>
 
-              <div className="fraud-card">
+              {/* ===================================== */}
+              {/* RIGHT PANELS */}
+              {/* ===================================== */}
 
-                <div className="fraud-icon">◇</div>
+              <div className="side-panels">
+                {/* FRAUD INTELLIGENCE */}
 
-                <div>
+                <div className="panel">
+                  <div className="panel-header">
+                    <div>
+                      <h3>Fraud Intelligence</h3>
+                      <p>Risk assessment engine</p>
+                    </div>
+                  </div>
 
-                  <strong>
-                    Fraud Detection Ready
-                  </strong>
+                  <div className="fraud-card">
+                    <div className="fraud-icon" aria-hidden="true">
+                      {Icons['Fraud Detection']}
+                    </div>
 
-                  <p>
-                    Rule-based scoring and Gradient
-                    Boosting are implemented.
+                    <div>
+                      <strong>Fraud Detection Ready</strong>
+
+                      <p>
+                        Rule-based scoring and Gradient Boosting are
+                        implemented.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="fraud-detail">
+                    <span>Rule-based engine</span>
+                    <strong>Available</strong>
+                  </div>
+
+                  <div className="fraud-detail">
+                    <span>Machine learning</span>
+                    <strong>Available</strong>
+                  </div>
+
+                  <div className="fraud-detail">
+                    <span>Live fraud API integration</span>
+                    <strong className="pending">Pending</strong>
+                  </div>
+                </div>
+
+                {/* SYSTEM ARCHITECTURE */}
+
+                <div className="panel">
+                  <div className="panel-header">
+                    <div>
+                      <h3>System Architecture</h3>
+                      <p>FinGuard infrastructure</p>
+                    </div>
+                  </div>
+
+                  <div className="architecture-item">
+                    <span className="architecture-dot"></span>
+                    PostgreSQL Ledger
+                  </div>
+
+                  <div className="architecture-item">
+                    <span className="architecture-dot"></span>
+                    Transactional Outbox
+                  </div>
+
+                  <div className="architecture-item">
+                    <span className="architecture-dot"></span>
+                    Redpanda Streaming
+                  </div>
+
+                  <p className="architecture-note">
+                    Components implemented in the backend. Live dashboard
+                    monitoring is coming next.
                   </p>
-
                 </div>
-
               </div>
-
-              <div className="fraud-detail">
-                <span>Rule-based engine</span>
-                <strong>Available</strong>
-              </div>
-
-              <div className="fraud-detail">
-                <span>Machine learning</span>
-                <strong>Available</strong>
-              </div>
-
-              <div className="fraud-detail">
-                <span>Live fraud API integration</span>
-                <strong className="pending">
-                  Pending
-                </strong>
-              </div>
-
-            </div>
-
-            {/* SYSTEM ARCHITECTURE */}
-
-            <div className="panel">
-
-              <div className="panel-header">
-
-                <div>
-                  <h3>System Architecture</h3>
-                  <p>FinGuard infrastructure</p>
-                </div>
-
-              </div>
-
-              <div className="architecture-item">
-                <span className="architecture-dot"></span>
-                PostgreSQL Ledger
-              </div>
-
-              <div className="architecture-item">
-                <span className="architecture-dot"></span>
-                Transactional Outbox
-              </div>
-
-              <div className="architecture-item">
-                <span className="architecture-dot"></span>
-                Redpanda Streaming
-              </div>
-
-              <p className="architecture-note">
-                Components implemented in the backend.
-                Live dashboard monitoring is coming next.
-              </p>
-
-            </div>
-
-          </div>
-
-        </section>
+            </section>
           </>
         )}
 
@@ -1375,87 +1512,61 @@ function App() {
         {/* ============================================ */}
 
         {activePage === 'Accounts' && (
-
           <section className="accounts-page">
-
             <div className="accounts-header">
               <div>
                 <h2>Customer Accounts</h2>
 
-                <p>
-                  Real account balances retrieved from PostgreSQL.
-                </p>
+                <p>Real account balances retrieved from PostgreSQL.</p>
               </div>
 
-              <span className="panel-tag">
-                LIVE DATA
-              </span>
+              <span className="panel-tag">LIVE DATA</span>
             </div>
 
             <div className="account-grid">
-
               {customerAccounts.map((account) => {
-
                 const accountBalance = balances?.find(
                   (item) => item.account_id === account.id
                 )
 
                 return (
-
                   <article className="account-card" key={account.id}>
-
                     <div className="account-card-top">
-
                       <div className="account-avatar">
                         {account.name.charAt(0)}
                       </div>
 
-                      <span className="account-status">
-                        CUSTOMER
-                      </span>
-
+                      <span className="account-status">CUSTOMER</span>
                     </div>
 
                     <h3>{account.name}</h3>
 
-                    <p className="account-id">
-                      {account.id}
-                    </p>
+                    <p className="account-id">{account.id}</p>
 
                     <div className="account-balance">
-
                       <span>Available Balance</span>
 
                       <h2>
                         {accountBalance
-                          ? accountBalance.balance_cents.toLocaleString('en-US')
+                          ? accountBalance.balance_cents.toLocaleString(
+                              'en-US'
+                            )
                           : balanceError
                             ? 'Unavailable'
-                            : 'Loading...'
-                        }
+                            : 'Loading...'}
 
-                        {accountBalance && (
-                          <small> cents</small>
-                        )}
+                        {accountBalance && <small> cents</small>}
                       </h2>
-
                     </div>
 
                     <div className="account-footer">
-
                       <span>Currency</span>
 
-                      <strong>
-                        {accountBalance?.currency ?? 'TND'}
-                      </strong>
-
+                      <strong>{accountBalance?.currency ?? 'TND'}</strong>
                     </div>
-
                   </article>
-
                 )
               })}
-
             </div>
 
             {balanceError && (
@@ -1463,9 +1574,7 @@ function App() {
                 Could not retrieve account balances from FastAPI.
               </p>
             )}
-
           </section>
-
         )}
 
         {/* ============================================ */}
@@ -1473,15 +1582,11 @@ function App() {
         {/* ============================================ */}
 
         {activePage === 'Transactions' && (
-
           <section className="transactions-page">
-
             <div className="transactions-page-header">
               <div>
                 <h2>Transaction History</h2>
-                <p>
-                  Financial movements retrieved from PostgreSQL.
-                </p>
+                <p>Financial movements retrieved from PostgreSQL.</p>
               </div>
 
               <span className="panel-tag">
@@ -1545,7 +1650,6 @@ function App() {
             {/* TRANSACTIONS TABLE */}
 
             <div className="panel">
-
               <div className="panel-header">
                 <div>
                   <h3>Financial Activity</h3>
@@ -1554,9 +1658,7 @@ function App() {
               </div>
 
               <div className="table-wrapper">
-
                 <table>
-
                   <thead>
                     <tr>
                       <th>ACCOUNT</th>
@@ -1568,41 +1670,33 @@ function App() {
                   </thead>
 
                   <tbody>
-
                     {movementsLoading ? (
-
                       <tr>
                         <td colSpan={5}>
                           Loading transaction history...
                         </td>
                       </tr>
-
                     ) : movementsError ? (
-
                       <tr>
                         <td colSpan={5}>
                           Unable to load transactions: {movementsError}
                         </td>
                       </tr>
-
                     ) : visibleMovements.length === 0 ? (
-
                       <tr>
-                        <td colSpan={5}>
-                          No transactions found.
-                        </td>
+                        <td colSpan={5}>No transactions found.</td>
                       </tr>
-
                     ) : (
-
                       visibleMovements.map((tx) => (
-
                         <tr
                           key={`${tx.accountId}-${tx.transaction_id}`}
                         >
-
                           <td>
-                            <strong>{tx.accountName}</strong>
+                            <strong
+                              style={{ color: 'var(--color-foreground)' }}
+                            >
+                              {tx.accountName}
+                            </strong>
                           </td>
 
                           <td>
@@ -1645,61 +1739,52 @@ function App() {
                               {tx.status}
                             </span>
                           </td>
-
                         </tr>
-
                       ))
-
                     )}
-
                   </tbody>
-
                 </table>
-
               </div>
-
             </div>
 
             <p className="transaction-note">
               Transfers between Alice and Bob appear as two account
               movements: one debit and one credit.
             </p>
-
           </section>
+        )}
 
+        {/* ============================================ */}
+        {/* ADMINISTRATION / USERS PAGE */}
+        {/* ============================================ */}
+
+        {activePage === 'Users' && currentUser?.role === 'ADMIN' && (
+          <UserManagement />
         )}
 
         {/* ============================================ */}
         {/* FRAUD DETECTION PAGE */}
         {/* ============================================ */}
 
-        {activePage === 'Users' && currentUser?.role === 'ADMIN' && <UserManagement />}
-
         {activePage === 'Fraud Detection' && (
-
           <section className="risk-page">
-
             <div className="risk-page-header">
               <div>
                 <h2>Fraud Risk Assessment</h2>
 
                 <p>
                   Analyze simulated transaction behavior using
-                  FinGuard's risk detection engine.
+                  FinGuard&apos;s risk detection engine.
                 </p>
               </div>
 
-              <span className="panel-tag">
-                FASTAPI + ML
-              </span>
+              <span className="panel-tag">FASTAPI + ML</span>
             </div>
 
             <div className="risk-grid">
-
               {/* RISK ASSESSMENT FORM */}
 
               <div className="panel risk-form-panel">
-
                 <div className="panel-header">
                   <div>
                     <h3>Transaction Analysis</h3>
@@ -1711,7 +1796,6 @@ function App() {
                   className="risk-form"
                   onSubmit={(event) => void handleAssessRisk(event)}
                 >
-
                   <label htmlFor="risk-amount">
                     Transaction Amount (cents)
                   </label>
@@ -1801,17 +1885,14 @@ function App() {
                   >
                     {riskLoading
                       ? 'Analyzing Transaction...'
-                      : '◇ Analyze Transaction'}
+                      : 'Analyze Transaction'}
                   </button>
-
                 </form>
-
               </div>
 
               {/* RISK ASSESSMENT RESULTS */}
 
               <div className="panel risk-results-panel">
-
                 <div className="panel-header">
                   <div>
                     <h3>Risk Assessment Results</h3>
@@ -1820,9 +1901,22 @@ function App() {
                 </div>
 
                 {!riskResult ? (
-
                   <div className="risk-empty">
-                    <div className="risk-empty-icon">◇</div>
+                    <div className="risk-empty-icon" aria-hidden="true">
+                      <svg
+                        width="26"
+                        height="26"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                        <path d="m9 12 2 2 4-4" />
+                      </svg>
+                    </div>
 
                     <h3>No assessment yet</h3>
 
@@ -1831,26 +1925,19 @@ function App() {
                       Analyze Transaction to see the results.
                     </p>
                   </div>
-
                 ) : (
-
                   <div
                     className="risk-results"
                     aria-live="polite"
                   >
-
                     <div className="risk-score-card">
-
                       <span>Rule-Based Risk Score</span>
 
-                      <h2>
-                        {riskResult.rule_assessment.score}
-                      </h2>
+                      <h2>{riskResult.rule_assessment.score}</h2>
 
                       <p>
                         Decision: {riskResult.rule_assessment.decision}
                       </p>
-
                     </div>
 
                     <div className="risk-result-row">
@@ -1867,7 +1954,8 @@ function App() {
                       <strong>
                         {(
                           riskResult.ml_assessment.fraud_probability * 100
-                        ).toFixed(1)}%
+                        ).toFixed(1)}
+                        %
                       </strong>
                     </div>
 
@@ -1896,15 +1984,12 @@ function App() {
                     </div>
 
                     <div className="risk-reasons">
-
                       <h4>Risk Indicators</h4>
 
-                      {riskResult.rule_assessment.reason_codes.length === 0 ? (
-
+                      {riskResult.rule_assessment.reason_codes.length ===
+                      0 ? (
                         <p>No rule-based risk indicators triggered.</p>
-
                       ) : (
-
                         <ul>
                           {riskResult.rule_assessment.reason_codes.map(
                             (reason, index) => (
@@ -1914,26 +1999,18 @@ function App() {
                             )
                           )}
                         </ul>
-
                       )}
-
                     </div>
 
                     <div className="risk-info">
-                      This is an advisory risk assessment.
-                      It does not execute, reject or block a transfer.
+                      This is an advisory risk assessment. It does not
+                      execute, reject or block a transfer.
                     </div>
-
                   </div>
-
                 )}
-
               </div>
-
             </div>
-
           </section>
-
         )}
 
         {/* ============================================ */}
@@ -1941,19 +2018,16 @@ function App() {
         {/* ============================================ */}
 
         {activePage === 'Event Monitoring' && (
-
           <section className="events-page">
-
             {/* HEADER */}
 
             <div className="events-page-header">
-
               <div>
                 <h2>Event Stream Monitoring</h2>
 
                 <p>
-                  Track PostgreSQL outbox publication and
-                  consumer processing.
+                  Track PostgreSQL outbox publication and consumer
+                  processing.
                 </p>
               </div>
 
@@ -1966,7 +2040,6 @@ function App() {
               >
                 ↻ Refresh
               </button>
-
             </div>
 
             {/* LOADING AND ERROR MESSAGES */}
@@ -1989,24 +2062,17 @@ function App() {
             {/* EVENT STATISTICS */}
 
             {eventMonitoring && (
-
               <>
                 <div className="events-stats-grid">
-
                   <div className="events-stat-card">
-
                     <span>Total Events</span>
 
-                    <h2>
-                      {eventMonitoring.total_events}
-                    </h2>
+                    <h2>{eventMonitoring.total_events}</h2>
 
                     <p>Created in PostgreSQL outbox</p>
-
                   </div>
 
                   <div className="events-stat-card">
-
                     <span>Pending Events</span>
 
                     <h2 className="events-pending-number">
@@ -2014,11 +2080,9 @@ function App() {
                     </h2>
 
                     <p>Awaiting successful publication</p>
-
                   </div>
 
                   <div className="events-stat-card">
-
                     <span>Published Events</span>
 
                     <h2 className="events-published-number">
@@ -2026,11 +2090,9 @@ function App() {
                     </h2>
 
                     <p>Publication recorded</p>
-
                   </div>
 
                   <div className="events-stat-card">
-
                     <span>Processed Events</span>
 
                     <h2 className="events-processed-number">
@@ -2038,15 +2100,12 @@ function App() {
                     </h2>
 
                     <p>Recorded by the consumer</p>
-
                   </div>
-
                 </div>
 
                 {/* EVENT PIPELINE */}
 
                 <div className="panel events-pipeline-panel">
-
                   <div className="panel-header">
                     <div>
                       <h3>Event Processing Pipeline</h3>
@@ -2055,41 +2114,64 @@ function App() {
                   </div>
 
                   <div className="events-pipeline">
-
                     <div className="pipeline-node">
                       <strong>PostgreSQL</strong>
                       <span>Transactional Outbox</span>
                     </div>
 
-                    <span className="pipeline-arrow">→</span>
+                    <span className="pipeline-arrow" aria-hidden="true">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                      </svg>
+                    </span>
 
                     <div className="pipeline-node">
                       <strong>Redpanda</strong>
                       <span>Event Streaming</span>
                     </div>
 
-                    <span className="pipeline-arrow">→</span>
+                    <span className="pipeline-arrow" aria-hidden="true">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                      </svg>
+                    </span>
 
                     <div className="pipeline-node">
                       <strong>Consumer</strong>
                       <span>Idempotent Processing</span>
                     </div>
-
                   </div>
 
                   <p className="events-pipeline-note">
-                    Architecture overview. The counters above come
-                    from PostgreSQL, not from live broker health checks.
+                    Architecture overview. The counters above come from
+                    PostgreSQL, not from live broker health checks.
                   </p>
-
                 </div>
 
                 {/* EVENT HISTORY */}
 
                 <div className="panel events-history-panel">
-
                   <div className="panel-header">
-
                     <div>
                       <h3>Recent Events</h3>
                       <p>Latest outbox events from PostgreSQL</p>
@@ -2100,17 +2182,10 @@ function App() {
                         ? 'STALE DATA'
                         : 'LIVE DATA'}
                     </span>
-
                   </div>
 
                   <div className="table-wrapper">
-
                     <table className="events-table">
-
-                      {/* ============================================ */}
-                      {/* TABLE HEADER */}
-                      {/* ============================================ */}
-
                       <thead>
                         <tr>
                           <th>EVENT ID</th>
@@ -2124,28 +2199,14 @@ function App() {
                         </tr>
                       </thead>
 
-                      {/* ============================================ */}
-                      {/* TABLE BODY */}
-                      {/* ============================================ */}
-
                       <tbody>
-
                         {eventMonitoring.recent_events.length === 0 ? (
-
                           <tr>
-                            <td colSpan={8}>
-                              No events found.
-                            </td>
+                            <td colSpan={8}>No events found.</td>
                           </tr>
-
                         ) : (
-
                           eventMonitoring.recent_events.map((event) => (
-
                             <tr key={event.event_id}>
-
-                              {/* EVENT ID */}
-
                               <td>
                                 <span
                                   className="transaction-id"
@@ -2154,8 +2215,6 @@ function App() {
                                   {event.event_id.slice(0, 8)}...
                                 </span>
                               </td>
-
-                              {/* RELATED TRANSACTION */}
 
                               <td>
                                 <span
@@ -2166,33 +2225,31 @@ function App() {
                                 </span>
                               </td>
 
-                              {/* EVENT TYPE */}
-
                               <td>
-                                <strong>
+                                <strong
+                                  style={{
+                                    color: 'var(--color-foreground)',
+                                  }}
+                                >
                                   {event.event_type}
                                 </strong>
                               </td>
-
-                              {/* CREATION TIMESTAMP */}
 
                               <td>
                                 {formatMonitoringDate(event.created_at)}
                               </td>
 
-                              {/* PUBLICATION TIMESTAMP */}
-
                               <td>
-                                {formatMonitoringDate(event.published_at)}
+                                {formatMonitoringDate(
+                                  event.published_at
+                                )}
                               </td>
 
-                              {/* PROCESSING TIMESTAMP */}
-
                               <td>
-                                {formatMonitoringDate(event.processed_at)}
+                                {formatMonitoringDate(
+                                  event.processed_at
+                                )}
                               </td>
-
-                              {/* EVENT STATUS */}
 
                               <td>
                                 <span
@@ -2202,45 +2259,31 @@ function App() {
                                 </span>
                               </td>
 
-                              {/* PUBLICATION ATTEMPTS */}
-
-                              <td>
-                                {event.publish_attempts}
-                              </td>
-
+                              <td>{event.publish_attempts}</td>
                             </tr>
-
                           ))
-
                         )}
-
                       </tbody>
-
                     </table>
-
                   </div>
 
                   <p className="events-table-note">
-                    Row statuses represent outbox publication.
-                    Consumer processing is reported separately
-                    in the Processed Events counter.
+                    Row statuses represent outbox publication. Consumer
+                    processing is reported separately in the Processed
+                    Events counter.
                   </p>
-
                 </div>
 
                 {/* AUTOMATIC REFRESH */}
 
                 <p className="events-refresh-note">
-                  ● Automatically refreshes every 10 seconds
-                  while this page is open.
+                  <span className="indicator-dot" aria-hidden="true" />
+                  Automatically refreshes every 10 seconds while this
+                  page is open.
                 </p>
-
               </>
-
             )}
-
           </section>
-
         )}
 
         {/* FOOTER */}
@@ -2248,7 +2291,6 @@ function App() {
         <footer className="footer">
           © 2026 FinGuard — Simulated FinTech Platform
         </footer>
-
       </main>
 
       {/* ============================================ */}
@@ -2256,9 +2298,7 @@ function App() {
       {/* ============================================ */}
 
       {showTransferModal && (
-
         <div className="transfer-overlay" onClick={closeTransferModal}>
-
           <section
             className="transfer-modal"
             role="dialog"
@@ -2266,9 +2306,7 @@ function App() {
             aria-labelledby="transfer-title"
             onClick={(event) => event.stopPropagation()}
           >
-
             <div className="transfer-modal-header">
-
               <div>
                 <p className="eyebrow">FINGUARD PAYMENTS</p>
                 <h2 id="transfer-title">
@@ -2283,16 +2321,39 @@ function App() {
                 onClick={closeTransferModal}
                 aria-label="Close transfer form"
               >
-                ×
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M18 6 6 18" />
+                  <path d="m6 6 12 12" />
+                </svg>
               </button>
-
             </div>
 
             {transferResult ? (
-
               <div className="transfer-success" role="status">
-
-                <div className="success-icon">✓</div>
+                <div className="success-icon" aria-hidden="true">
+                  <svg
+                    width="28"
+                    height="28"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                </div>
 
                 <h3>Transfer Successful!</h3>
 
@@ -2308,7 +2369,10 @@ function App() {
                 <div className="review-row">
                   <span>Amount</span>
                   <strong>
-                    {transferResult.amount_cents.toLocaleString('en-US')} cents
+                    {transferResult.amount_cents.toLocaleString(
+                      'en-US'
+                    )}{' '}
+                    cents
                   </strong>
                 </div>
 
@@ -2326,61 +2390,47 @@ function App() {
                     Done
                   </button>
                 </div>
-
               </div>
-
             ) : !isTransferReview ? (
-
               <form
                 className="transfer-form"
                 onSubmit={handleReviewTransfer}
               >
-
                 {/* SOURCE ACCOUNT */}
 
-                <label htmlFor="transfer-from">
-                  From Account
-                </label>
+                <label htmlFor="transfer-from">From Account</label>
 
                 <select
                   id="transfer-from"
                   value={transferFrom}
-                  onChange={(event) => setTransferFrom(event.target.value)}
+                  onChange={(event) =>
+                    setTransferFrom(event.target.value)
+                  }
                 >
-                  <option value={ALICE_ACCOUNT_ID}>
-                    Alice — TND
-                  </option>
+                  <option value={ALICE_ACCOUNT_ID}>Alice — TND</option>
 
-                  <option value={BOB_ACCOUNT_ID}>
-                    Bob — TND
-                  </option>
+                  <option value={BOB_ACCOUNT_ID}>Bob — TND</option>
                 </select>
 
                 {/* DESTINATION ACCOUNT */}
 
-                <label htmlFor="transfer-to">
-                  To Account
-                </label>
+                <label htmlFor="transfer-to">To Account</label>
 
                 <select
                   id="transfer-to"
                   value={transferTo}
-                  onChange={(event) => setTransferTo(event.target.value)}
+                  onChange={(event) =>
+                    setTransferTo(event.target.value)
+                  }
                 >
-                  <option value={ALICE_ACCOUNT_ID}>
-                    Alice — TND
-                  </option>
+                  <option value={ALICE_ACCOUNT_ID}>Alice — TND</option>
 
-                  <option value={BOB_ACCOUNT_ID}>
-                    Bob — TND
-                  </option>
+                  <option value={BOB_ACCOUNT_ID}>Bob — TND</option>
                 </select>
 
                 {/* AMOUNT */}
 
-                <label htmlFor="transfer-amount">
-                  Amount (cents)
-                </label>
+                <label htmlFor="transfer-amount">Amount (cents)</label>
 
                 <input
                   id="transfer-amount"
@@ -2388,7 +2438,9 @@ function App() {
                   inputMode="numeric"
                   placeholder="Example: 100"
                   value={transferAmount}
-                  onChange={(event) => setTransferAmount(event.target.value)}
+                  onChange={(event) =>
+                    setTransferAmount(event.target.value)
+                  }
                   required
                 />
 
@@ -2420,7 +2472,6 @@ function App() {
                 {/* ACTION BUTTONS */}
 
                 <div className="transfer-actions">
-
                   <button
                     type="button"
                     className="secondary-button"
@@ -2429,25 +2480,17 @@ function App() {
                     Cancel
                   </button>
 
-                  <button
-                    type="submit"
-                    className="primary-button"
-                  >
-                    Review Transfer →
+                  <button type="submit" className="primary-button">
+                    Review Transfer
                   </button>
-
                 </div>
-
               </form>
-
             ) : (
-
               /* ==================================== */
               /* TRANSFER CONFIRMATION PREVIEW */
               /* ==================================== */
 
               <div className="transfer-review">
-
                 <div className="review-row">
                   <span>From</span>
                   <strong>{getAccountName(transferFrom)}</strong>
@@ -2461,7 +2504,8 @@ function App() {
                 <div className="review-row">
                   <span>Amount</span>
                   <strong>
-                    {Number(transferAmount).toLocaleString('en-US')} cents
+                    {Number(transferAmount).toLocaleString('en-US')}{' '}
+                    cents
                   </strong>
                 </div>
 
@@ -2472,28 +2516,25 @@ function App() {
 
                 <div className="review-row">
                   <span>Description</span>
-                  <strong>{transferDescription || 'No description'}</strong>
+                  <strong>
+                    {transferDescription || 'No description'}
+                  </strong>
                 </div>
 
                 <div className="transfer-info">
-
-                  {pendingTransfer
-                    ? (
-                      <>
-                        This transfer may already have been processed.
-                        Retry using the same request and idempotency key.
-                        Do not create a new transfer until its outcome
-                        is confirmed.
-                      </>
-                    )
-                    : (
-                      <>
-                        This is a simulated transfer.
-                        No transaction has been submitted yet.
-                      </>
-                    )
-                  }
-
+                  {pendingTransfer ? (
+                    <>
+                      This transfer may already have been processed.
+                      Retry using the same request and idempotency key.
+                      Do not create a new transfer until its outcome is
+                      confirmed.
+                    </>
+                  ) : (
+                    <>
+                      This is a simulated transfer. No transaction has
+                      been submitted yet.
+                    </>
+                  )}
                 </div>
 
                 {transferFormError && (
@@ -2503,14 +2544,15 @@ function App() {
                 )}
 
                 <div className="transfer-actions">
-
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={transferSubmitting || pendingTransfer !== null}
+                    disabled={
+                      transferSubmitting || pendingTransfer !== null
+                    }
                     onClick={() => setIsTransferReview(false)}
                   >
-                    ← Edit
+                    Edit
                   </button>
 
                   <button
@@ -2525,19 +2567,12 @@ function App() {
                         ? 'Retry Same Transfer'
                         : 'Confirm Transfer'}
                   </button>
-
                 </div>
-
               </div>
-
             )}
-
           </section>
-
         </div>
-
       )}
-
     </div>
   )
 }

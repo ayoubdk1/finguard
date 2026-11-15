@@ -50,7 +50,9 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         setNewPassword('')
         setResetToken('')
         setMode('login')
-        setInfoMessage('Votre mot de passe a ?t? réinitialisé avec succès. Vous pouvez maintenant vous connecter.')
+        setInfoMessage(
+          'Votre mot de passe a été réinitialisé avec succès. Vous pouvez maintenant vous connecter.'
+        )
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -70,137 +72,177 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   const getSubtitle = () => {
-    if (mode === 'forgot') return 'Entrez votre adresse email pour recevoir un jeton de réinitialisation'
-    if (mode === 'reset') return 'Choisissez votre nouveau mot de passe sécurisé (12 caractères min.)'
+    if (mode === 'forgot')
+      return 'Entrez votre adresse email pour recevoir un jeton de réinitialisation'
+    if (mode === 'reset')
+      return 'Choisissez votre nouveau mot de passe sécurisé (12 caractères min.)'
     return 'Accès privé réservé aux utilisateurs autorisés'
   }
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: '6px',
-    border: '1px solid #334155',
-    background: '#1e293b',
-    color: '#fff',
-    fontSize: '14px',
-    boxSizing: 'border-box',
-  }
-
   return (
-    <div style={{ maxWidth: 420, margin: '60px auto', padding: '32px', border: '1px solid #334155', borderRadius: '12px', background: '#0f172a', color: '#f8fafc' }}>
-      <h2 style={{ textAlign: 'center', marginBottom: 8, fontSize: '24px' }}>
-        {getTitle()}
-      </h2>
-      <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '14px', marginBottom: 24 }}>
-        {getSubtitle()}
-      </p>
-
-      {error && (
-        <div style={{ padding: '12px', marginBottom: '16px', background: '#451a1a', border: '1px solid #dc2626', borderRadius: '6px', color: '#fca5a5', fontSize: '14px' }}>
-          {error}
-        </div>
-      )}
-
-      {infoMessage && (
-        <div style={{ padding: '12px', marginBottom: '16px', background: '#064e3b', border: '1px solid #10b981', borderRadius: '6px', color: '#a7f3d0', fontSize: '14px' }}>
-          {infoMessage}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {(mode === 'login' || mode === 'forgot') && (
-          <div>
-            <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Adresse email</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="alice@example.com"
-              style={inputStyle}
-            />
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="brand-icon" aria-hidden="true">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
           </div>
-        )}
-
-        {mode === 'login' && (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontSize: '13px', color: '#cbd5e1' }}>Mot de passe</label>
-              <button
-                type="button"
-                onClick={() => switchMode('forgot')}
-                style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', padding: 0 }}
-              >
-                Mot de passe oublié ?
-              </button>
+            <div
+              style={{
+                fontSize: '18px',
+                fontWeight: 700,
+                letterSpacing: '-0.02em',
+              }}
+            >
+              FinGuard
             </div>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="????????????"
-              style={inputStyle}
-            />
+            <div
+              style={{
+                fontSize: '11px',
+                color: 'var(--color-muted-foreground)',
+              }}
+            >
+              Financial Security &amp; Ledger
+            </div>
+          </div>
+        </div>
+
+        <h2 className="auth-title">{getTitle()}</h2>
+        <p className="auth-subtitle">{getSubtitle()}</p>
+
+        {error && (
+          <div className="auth-alert-error" role="alert">
+            {error}
           </div>
         )}
 
-        {mode === 'reset' && (
-          <>
-            <div>
-              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Jeton de réinitialisation</label>
+        {infoMessage && (
+          <div className="auth-alert-info" role="status">
+            {infoMessage}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="auth-form">
+          {(mode === 'login' || mode === 'forgot') && (
+            <div className="auth-field">
+              <label htmlFor="auth-email">Adresse email</label>
               <input
-                type="text"
+                id="auth-email"
+                type="email"
                 required
-                value={resetToken}
-                onChange={(e) => setResetToken(e.target.value)}
-                placeholder="Collez votre jeton de réinitialisation"
-                style={inputStyle}
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="alice@example.com"
+                className="auth-input"
               />
             </div>
+          )}
 
-            <div>
-              <label style={{ display: 'block', fontSize: '13px', marginBottom: '6px', color: '#cbd5e1' }}>Nouveau mot de passe (12 caractères min.)</label>
+          {mode === 'login' && (
+            <div className="auth-field">
+              <div className="auth-field-header">
+                <label htmlFor="auth-password" style={{ marginBottom: 0 }}>
+                  Mot de passe
+                </label>
+                <button
+                  type="button"
+                  onClick={() => switchMode('forgot')}
+                  className="auth-link-btn"
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
               <input
+                id="auth-password"
                 type="password"
                 required
-                minLength={12}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="????????????"
-                style={inputStyle}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="auth-input"
               />
             </div>
-          </>
-        )}
+          )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{ width: '100%', padding: '12px', borderRadius: '6px', border: 'none', background: '#2563eb', color: '#fff', fontWeight: 600, fontSize: '15px', cursor: loading ? 'not-allowed' : 'pointer', marginTop: '8px' }}
-        >
-          {loading
-            ? 'Chargement...'
-            : mode === 'forgot'
-            ? 'Envoyer le lien de réinitialisation'
-            : mode === 'reset'
-            ? 'Mettre à jour le mot de passe'
-            : 'Se connecter'}
-        </button>
-      </form>
+          {mode === 'reset' && (
+            <>
+              <div className="auth-field">
+                <label htmlFor="auth-reset-token">
+                  Jeton de réinitialisation
+                </label>
+                <input
+                  id="auth-reset-token"
+                  type="text"
+                  required
+                  value={resetToken}
+                  onChange={(e) => setResetToken(e.target.value)}
+                  placeholder="Collez votre jeton de réinitialisation"
+                  className="auth-input"
+                />
+              </div>
 
-      {mode !== 'login' && (
-        <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#94a3b8' }}>
-          Retour à la connexion ?{' '}
+              <div className="auth-field">
+                <label htmlFor="auth-new-password">
+                  Nouveau mot de passe (12 caractères min.)
+                </label>
+                <input
+                  id="auth-new-password"
+                  type="password"
+                  required
+                  minLength={12}
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="auth-input"
+                />
+              </div>
+            </>
+          )}
+
           <button
-            type="button"
-            onClick={() => switchMode('login')}
-            style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+            type="submit"
+            disabled={loading}
+            className="auth-submit-btn"
           >
-            Se connecter
+            {loading
+              ? 'Chargement...'
+              : mode === 'forgot'
+                ? 'Envoyer le lien de réinitialisation'
+                : mode === 'reset'
+                  ? 'Mettre à jour le mot de passe'
+                  : 'Se connecter'}
           </button>
-        </div>
-      )}
+        </form>
+
+        {mode !== 'login' && (
+          <div className="auth-footer">
+            Retour à la connexion ?{' '}
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="auth-link-btn"
+            >
+              Se connecter
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
