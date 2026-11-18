@@ -16,3 +16,5 @@ redis>=5.0.0
 pyotp>=2.9.0
 prometheus-client>=0.20,<1
 cryptography>=50.0.0
+msgpack>=1.2.3
+urllib3>=2.8.0
