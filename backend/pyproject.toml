@@ -3,12 +3,11 @@ target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-ignore = ["E501"]
+select = ["E", "F", "I", "B", "S"]
+ignore = ["E501", "B008"]
 
 [tool.mypy]
 python_version = "3.13"
 ignore_missing_imports = true
-check_untyped_defs = false
+check_untyped_defs = true
 warn_unused_ignores = false
-disable_error_code = ["import-untyped", "union-attr", "assignment"]

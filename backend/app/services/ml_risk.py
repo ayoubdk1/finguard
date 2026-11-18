@@ -49,7 +49,7 @@ def predict_ml_risk(amount_cents: int, transfers_last_10min: int, account_age_mi
         pred = int(model.predict(row)[0])
         prob = float(model.predict_proba(row)[0][1])
         imp = getattr(model, "feature_importances_", None)
-        contributions = {f: round(float(v), 4) for f, v in zip(FEATURES, imp)} if imp is not None and len(imp) == len(FEATURES) else {}
+        contributions = {f: round(float(v), 4) for f, v in zip(FEATURES, imp, strict=True)} if imp is not None and len(imp) == len(FEATURES) else {}
         return {"ml_available": True, "model_version": model_version, "ml_prediction": "FRAUD" if pred == 1 else "NORMAL", "ml_probability": round(prob, 4), "fraud_probability": round(prob, 4), "feature_contributions": contributions}
     except Exception as exc:
         return {"ml_available": False, "model_version": model_version, "ml_prediction": "UNAVAILABLE", "ml_probability": None, "fraud_probability": None, "feature_contributions": {}, "fallback_reason": str(exc)}

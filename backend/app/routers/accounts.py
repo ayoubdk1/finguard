@@ -49,12 +49,12 @@ def create_user(
         try:
             db.commit()
 
-        except IntegrityError:
+        except IntegrityError as exc:
             db.rollback()
             raise HTTPException(
                 status_code=409,
                 detail="Email already registered",
-            )
+            ) from exc
 
         db.refresh(user)
         return user

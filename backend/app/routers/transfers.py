@@ -130,19 +130,19 @@ def create_deposit(
             record_audit_event(db, action="DEPOSIT_CREATED", resource_type="DEPOSIT", resource_id=tx.id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"amount_cents": data.amount_cents})
             db.commit()
         except IdempotencyConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         except AccountNotFound as exc:
             raise HTTPException(
                 status_code=404,
                 detail=str(exc),
-            )
+            ) from exc
 
         except InvalidTransaction as exc:
             raise HTTPException(
                 status_code=400,
                 detail=str(exc),
-            )
+            ) from exc
 
         except LedgerError as exc:
             raise HTTPException(
@@ -262,7 +262,7 @@ def create_transfer(
                     try:
                         fx_rate = get_latest_rate(db, src_peek.currency, dst_peek.currency)
                     except ExchangeRateNotFound as exc:
-                        raise HTTPException(status_code=400, detail=str(exc))
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
                     fx_src_acct = db.scalar(
                         select(Account).where(Account.name == "SYSTEM_FX", Account.currency == src_peek.currency)
                     )
@@ -293,7 +293,7 @@ def create_transfer(
                 try:
                     check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
                 except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
-                    raise HTTPException(status_code=422, detail=str(exc))
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
 
                 converted_amount_cents = None
                 fee_cents = None
@@ -313,19 +313,19 @@ def create_transfer(
                         before_commit=lambda session, tx: enqueue_transfer_posted(
                             session=session,
                             transaction_id=tx.id,
-                            source_account_id=source.id,
-                            destination_account_id=destination.id,
+                            source_account_id=source.id,  # noqa: B023
+                            destination_account_id=destination.id,  # noqa: B023
                             amount_cents=data.amount_cents,
-                            currency=source.currency,
+                            currency=source.currency,  # noqa: B023
                         ),
                     )
                 else:
-                    assert fx_rate is not None
-                    assert sys_fx_src_id is not None and sys_fx_dst_id is not None
+                    if fx_rate is None or sys_fx_src_id is None or sys_fx_dst_id is None:
+                        raise HTTPException(status_code=500, detail="FX configuration missing")
 
                     converted_amount_cents, fee_cents, effective_rate = calculate_fx_conversion(
                         source_amount_cents=data.amount_cents,
-                        base_currency=source.currency,
+                        base_currency=source.currency,  # noqa: B023
                         target_currency=destination.currency,
                         rate_scaled=fx_rate.rate,
                         fee_bps=fx_rate.fee_bps,
@@ -344,10 +344,10 @@ def create_transfer(
                         before_commit=lambda session, tx: enqueue_transfer_posted(
                             session=session,
                             transaction_id=tx.id,
-                            source_account_id=source.id,
-                            destination_account_id=destination.id,
+                            source_account_id=source.id,  # noqa: B023
+                            destination_account_id=destination.id,  # noqa: B023
                             amount_cents=data.amount_cents,
-                            currency=source.currency,
+                            currency=source.currency,  # noqa: B023
                         ),
                         commit=False,
                     )
@@ -445,7 +445,7 @@ def create_transfer(
 
             except IdempotencyConflict as exc:
                 db.rollback()
-                raise HTTPException(status_code=409, detail=str(exc))
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             except InsufficientFunds as exc:
                 db.rollback()
                 src_acc = db.get(Account, data.source_account_id)
@@ -457,16 +457,16 @@ def create_transfer(
                     reason="INSUFFICIENT_FUNDS",
                 ))
                 db.commit()
-                raise HTTPException(status_code=409, detail=str(exc))
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             except AccountNotFound as exc:
                 db.rollback()
-                raise HTTPException(status_code=404, detail=str(exc))
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             except InvalidTransaction as exc:
                 db.rollback()
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             except LedgerError as exc:
                 db.rollback()
-                raise HTTPException(status_code=409, detail=str(exc))
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             except DBAPIError as exc:
                 db.rollback()
                 sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
@@ -641,16 +641,16 @@ def refund_transfer(
                 db.commit()
         except IdempotencyConflict as exc:
             db.rollback()
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except InsufficientFunds as exc:
             db.rollback()
             raise HTTPException(
                 status_code=409,
                 detail=f"Refund failed: recipient has insufficient funds ({exc})",
-            )
+            ) from exc
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         record_audit_event(db, action="TRANSFER_REFUND", resource_type="TRANSACTION", resource_id=transfer_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
         db.commit()

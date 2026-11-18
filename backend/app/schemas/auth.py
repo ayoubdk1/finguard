@@ -91,7 +91,7 @@ class TokenResponse(BaseModel):
 
     access_token: str
     refresh_token: str | None = None
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105
     mfa_required: bool = False
     mfa_token: str | None = None
 

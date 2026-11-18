@@ -108,8 +108,8 @@ def publish_batch(
                 envelope = make_envelope(event)
                 key_str = str(event.aggregate_id)
 
-                def _deliver():
-                    send_json(producer, TOPIC, key_str, envelope)
+                def _deliver(k=key_str, e=envelope):
+                    send_json(producer, TOPIC, k, e)
 
                 try:
                     if use_circuit_breaker:
