@@ -1,17 +1,20 @@
 import logging
 import os
 import re
+import socket
 import time
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from app.core.logging import configure_json_logging, request_id_ctx
 from app.core.metrics import (
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_TOTAL,
+    OUTBOX_DEAD_COUNT,
     render_prometheus_metrics,
 )
 from app.db.session import SessionLocal, engine  # noqa: F401
@@ -39,7 +42,13 @@ def validate_production_config() -> None:
 
 validate_production_config()
 
-app = FastAPI(title="FinGuard API")
+_is_prod = os.getenv("FINGUARD_ENV", "development").lower() == "production"
+app = FastAPI(
+    title="FinGuard API",  # gitleaks:allow
+    docs_url=None if _is_prod else "/docs",  # gitleaks:allow
+    redoc_url=None if _is_prod else "/redoc",
+    openapi_url=None if _is_prod else "/openapi.json",
+)
 
 _allowed_origins = [
     o.strip()
@@ -80,9 +89,18 @@ async def observability_and_security_middleware(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = (
         "max-age=63072000; includeSubDomains; preload"
     )
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; frame-ancestors 'none'"
-    )
+    if request.url.path in ("/docs", "/redoc"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://fastapi.tiangolo.com; "
+            "frame-ancestors 'none'"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; frame-ancestors 'none'"
+        )
 
     route = request.scope.get("route")
     path = getattr(route, "path", "unmatched")
@@ -134,6 +152,76 @@ def readiness_check():
     from app.services.ml_risk import is_fraud_model_ready
     checks["fraud_model"] = "ok" if is_fraud_model_ready() else "missing_or_invalid"
 
+    try:
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
+        ini_path = Path(__file__).resolve().parents[1] / "alembic.ini"
+        cfg = Config(str(ini_path))
+        cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+        head_rev = ScriptDirectory.from_config(cfg).get_current_head()
+        with engine.connect() as conn:
+            current_rev = MigrationContext.configure(conn).get_current_revision()
+        if current_rev == head_rev:
+            checks["migrations"] = "ok"
+        else:
+            checks["migrations"] = "out_of_date"
+            is_ready = False
+    except Exception:
+        checks["migrations"] = "error"
+        is_ready = False
+
+    streaming_on = os.getenv("FINGUARD_STREAMING_ENABLED", "0") == "1"
+    kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
+    if streaming_on or kafka_servers:
+        target = kafka_servers.split(",")[0].strip() if kafka_servers else "127.0.0.1:9092"
+        host, _, port_str = target.partition(":")
+        try:
+            with socket.create_connection((host, int(port_str or 9092)), timeout=1.0):
+                checks["kafka"] = "ok"
+        except Exception:
+            checks["kafka"] = "unreachable"
+            if streaming_on:
+                is_ready = False
+    else:
+        checks["kafka"] = "disabled"
+
+    try:
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
+        ini_path = Path(__file__).resolve().parents[1] / "alembic.ini"
+        cfg = Config(str(ini_path))
+        cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+        head_rev = ScriptDirectory.from_config(cfg).get_current_head()
+        with engine.connect() as conn:
+            current_rev = MigrationContext.configure(conn).get_current_revision()
+        if current_rev == head_rev:
+            checks["migrations"] = "ok"
+        else:
+            checks["migrations"] = "out_of_date"
+            is_ready = False
+    except Exception:
+        checks["migrations"] = "error"
+        is_ready = False
+
+    streaming_on = os.getenv("FINGUARD_STREAMING_ENABLED", "0") == "1"
+    kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
+    if streaming_on or kafka_servers:
+        target = kafka_servers.split(",")[0].strip() if kafka_servers else "127.0.0.1:9092"
+        host, _, port_str = target.partition(":")
+        try:
+            with socket.create_connection((host, int(port_str or 9092)), timeout=1.0):
+                checks["kafka"] = "ok"
+        except Exception:
+            checks["kafka"] = "unreachable"
+            if streaming_on:
+                is_ready = False
+    else:
+        checks["kafka"] = "disabled"
+
     if not is_ready:
         raise HTTPException(
             status_code=503,
@@ -144,6 +232,14 @@ def readiness_check():
 
 @app.get("/metrics")
 def prometheus_metrics():
+    try:
+        from app.db.models import OutboxEvent, OutboxStatus
+
+        with SessionLocal() as db:
+            dead = int(db.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.status == OutboxStatus.DEAD)) or 0)
+            OUTBOX_DEAD_COUNT.set(dead)
+    except Exception:
+        pass
     payload, content_type = render_prometheus_metrics()
     return Response(content=payload, media_type=content_type)
 

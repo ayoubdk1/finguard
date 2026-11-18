@@ -73,6 +73,74 @@
           "legendFormat": "{{limiter}}"
         }
       ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP 5xx Error Rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(finguard_http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "HTTP 5xx Error Rate"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Outbox DEAD Events",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "finguard_outbox_dead_count",
+          "legendFormat": "Outbox DEAD Events"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Ledger Reconciliation Imbalance",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "finguard_ledger_reconciliation_imbalance",
+          "legendFormat": "Ledger Reconciliation Imbalance"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Rate Limit 429 Spikes",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(finguard_rate_limit_hits_total[5m])) by (limiter)",
+          "legendFormat": "Rate Limit 429 Spikes"
+        }
+      ]
     }
   ]
 }
