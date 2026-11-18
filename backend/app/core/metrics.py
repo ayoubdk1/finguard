@@ -43,5 +43,11 @@ LEDGER_RECONCILIATION_LAST_RUN_TIMESTAMP = Gauge(
 )
 
 
+OUTBOX_DEAD_COUNT = Gauge(
+    "finguard_outbox_dead_count",
+    "Number of DEAD outbox events requiring investigation",
+)
+
+
 def render_prometheus_metrics() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST
