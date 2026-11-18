@@ -28,7 +28,7 @@ jobs:
         working-directory: backend
     env:
       DATABASE_URL: postgresql+psycopg://finguard:finguard_dev_password@localhost:5432/finguard_test
-      FINGUARD_JWT_SECRET: ci-test-secret-key-at-least-32-characters-long
+      FINGUARD_JWT_SECRET: ci-test-secret-key-at-least-32-characters-long  # gitleaks:allow
       FINGUARD_REDIS_URL: redis://localhost:6379/0
       PYTHONPATH: .
     steps:
