@@ -29,7 +29,7 @@ def validate_production_config() -> None:
     if os.getenv("FINGUARD_ENV", "development").lower() != "production":
         return
     jwt_secret = os.getenv("FINGUARD_JWT_SECRET", "").strip()
-    if not jwt_secret or jwt_secret == "dev-only-insecure-secret-key-change-me-32chars" or len(jwt_secret) < 32:
+    if not jwt_secret or jwt_secret == "dev-only-insecure-secret-key-change-me-32chars" or len(jwt_secret) < 32:  # noqa: S105
         raise RuntimeError("FATAL: FINGUARD_JWT_SECRET must be at least 32 chars and non-default in production")
     if os.getenv("FINGUARD_DEMO_MODE") == "1":
         raise RuntimeError("FATAL: FINGUARD_DEMO_MODE=1 cannot be enabled in production")
@@ -238,8 +238,8 @@ def prometheus_metrics():
         with SessionLocal() as db:
             dead = int(db.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.status == OutboxStatus.DEAD)) or 0)
             OUTBOX_DEAD_COUNT.set(dead)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to collect outbox dead count: %s", exc)
     payload, content_type = render_prometheus_metrics()
     return Response(content=payload, media_type=content_type)
 

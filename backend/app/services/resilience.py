@@ -126,5 +126,6 @@ def retry_with_backoff(
                 rng=rng,
             )
             sleep_fn(delay)
-    assert last_exc is not None
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Retry exhausted without exception")

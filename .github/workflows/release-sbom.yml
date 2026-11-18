@@ -1,0 +1,21 @@
+name: Release SBOM
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: finguard-sbom.cdx.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: finguard-sbom.cdx.json

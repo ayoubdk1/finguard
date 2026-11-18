@@ -31,7 +31,7 @@ def test_p5_deployment_files_hardened():
     assert "change-me-in-production" not in compose
     assert "FINGUARD_JWT_SECRET: ${FINGUARD_JWT_SECRET:?" in compose
     assert "127.0.0.1:5433:5432" in compose
-    assert "127.0.0.1:6379:6379" in compose
+    assert "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379" in compose
     assert "--requirepass" in compose
     assert "GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?" in compose
     assert "condition: service_healthy" in compose
