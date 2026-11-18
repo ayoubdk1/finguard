@@ -60,6 +60,7 @@ from app.security.tokens import (
     verify_mfa_token_with_jti,
     verify_password_reset_token,
 )
+from app.services.audit import get_client_ip, get_request_id, record_audit_event
 from app.services.email import get_email_sender
 
 logger = logging.getLogger("finguard.security")
@@ -134,7 +135,7 @@ def mfa_setup(current_user: User = Depends(get_current_user), _step_up: None = D
 
 
 @router.post("/auth/mfa/enable", status_code=status.HTTP_200_OK)
-def mfa_enable(payload: MfaVerifyRequest, current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
+def mfa_enable(request: Request, payload: MfaVerifyRequest, current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
     with SessionLocal() as session:
         user = session.get(User, current_user.id)
         if user is None or not user.mfa_secret:
@@ -147,6 +148,7 @@ def mfa_enable(payload: MfaVerifyRequest, current_user: User = Depends(get_curre
         plain_codes = generate_backup_codes(10)
         user.mfa_enabled = True
         user.mfa_last_totp_step = step
+        record_audit_event(session, action="MFA_ENABLED", resource_type="USER", resource_id=user.id, actor_id=user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
         user.mfa_failed_attempts = 0
         user.mfa_locked_until = None
         user.mfa_backup_codes = [hash_backup_code(c) for c in plain_codes]
@@ -155,7 +157,7 @@ def mfa_enable(payload: MfaVerifyRequest, current_user: User = Depends(get_curre
 
 
 @router.post("/auth/mfa/disable", status_code=status.HTTP_200_OK)
-def mfa_disable(payload: MfaDisableRequest, current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
+def mfa_disable(request: Request, payload: MfaDisableRequest, current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
     with SessionLocal() as session:
         user = session.get(User, current_user.id)
         if user is None or not user.mfa_enabled or not user.mfa_secret:
@@ -172,6 +174,7 @@ def mfa_disable(payload: MfaDisableRequest, current_user: User = Depends(get_cur
         user.mfa_backup_codes = None
         user.mfa_failed_attempts = 0
         user.mfa_locked_until = None
+        record_audit_event(session, action="MFA_DISABLED", resource_type="USER", resource_id=user.id, actor_id=user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
         session.commit()
         return {"status": "MFA successfully disabled"}
 

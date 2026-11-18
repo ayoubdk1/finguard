@@ -1,7 +1,10 @@
+import argparse
+import time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Account, LedgerEntry, Transaction, TransactionStatus
+from app.core.metrics import LEDGER_RECONCILIATION_IMBALANCE, LEDGER_RECONCILIATION_LAST_RUN_TIMESTAMP
 from app.db.session import SessionLocal
 
 
@@ -37,3 +40,14 @@ if __name__ == "__main__":
     with SessionLocal() as session:
         report = verify_ledger_reconciliation(session)
         print("Reconciliation OK:", report)
+
+
+def run_reconciliation_with_metrics(db: Session) -> dict:
+    LEDGER_RECONCILIATION_LAST_RUN_TIMESTAMP.set(time.time())
+    try:
+        res = verify_ledger_reconciliation(db)
+        LEDGER_RECONCILIATION_IMBALANCE.set(0)
+        return res
+    except AssertionError:
+        LEDGER_RECONCILIATION_IMBALANCE.set(1)
+        raise

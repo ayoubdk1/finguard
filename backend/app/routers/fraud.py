@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 
 from app.db.models import (
@@ -94,6 +94,7 @@ def start_investigation(
 def resolve_alert(
     alert_id: UUID,
     payload: FraudResolutionRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     if not has_permission(current_user.role, Permission.FRAUD_ALERT_RESOLVE):

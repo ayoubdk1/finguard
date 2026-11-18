@@ -1,8 +1,9 @@
 import logging
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
@@ -222,3 +223,64 @@ def account_transactions(
             account_id=account_id,
             transactions=history,
         )
+
+
+@router.get("/accounts/{account_id}/statement")
+def account_statement(
+    account_id: UUID,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    ensure_user_owns_account_id(account_id, current_user)
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        if account is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        opening_balance = 0
+        if from_date is not None:
+            opening_balance = int(
+                db.scalar(
+                    select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
+                        LedgerEntry.account_id == account_id,
+                        LedgerEntry.created_at < from_date,
+                    )
+                ) or 0
+            )
+
+        q = (
+            select(LedgerEntry, Transaction)
+            .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+            .where(LedgerEntry.account_id == account_id)
+        )
+        if from_date is not None:
+            q = q.where(LedgerEntry.created_at >= from_date)
+        if to_date is not None:
+            q = q.where(LedgerEntry.created_at <= to_date)
+        rows = db.execute(q.order_by(LedgerEntry.created_at.asc(), LedgerEntry.id.asc())).all()
+
+        running = opening_balance
+        entries = []
+        period_sum = 0
+        for entry, tx in rows:
+            running += int(entry.amount)
+            period_sum += int(entry.amount)
+            entries.append({
+                "entry_id": str(entry.id),
+                "transaction_id": str(tx.id),
+                "description": tx.description,
+                "amount_cents": int(entry.amount),
+                "currency": entry.currency,
+                "running_balance_cents": running,
+                "created_at": entry.created_at.isoformat(),
+            })
+
+        return {
+            "account_id": str(account_id),
+            "currency": account.currency,
+            "opening_balance_cents": opening_balance,
+            "closing_balance_cents": running,
+            "derived_balance_check": (opening_balance + period_sum) == running,
+            "entries": entries,
+        }

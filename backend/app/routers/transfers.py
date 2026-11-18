@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, IntegrityError, SQLAlchemyError
 
@@ -12,6 +12,7 @@ from app.core.metrics import FRAUD_RISK_SCORE, TRANSFERS_TOTAL
 from app.db.models import (
     Account,
     AccountType,
+    ApprovalRequest,
     FraudAlert,
     FraudAlertStatus,
     LedgerEntry,
@@ -25,6 +26,7 @@ from app.schemas.deposit import DepositCreate
 from app.schemas.transfer import TransferCreate, TransferResponse
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, Role, has_permission
+from app.services.audit import get_client_ip, get_request_id, record_audit_event
 from app.services.fx import ExchangeRateNotFound, calculate_fx_conversion, get_latest_rate
 from app.services.ledger import (
     AccountNotFound,
@@ -51,6 +53,7 @@ router = APIRouter()
 @router.post("/deposits", status_code=201)
 def create_deposit(
     data: DepositCreate,
+    request: Request,
     idempotency_key: str = Header(
         min_length=1,
         max_length=100,
@@ -123,6 +126,9 @@ def create_deposit(
                 ],
                 description=data.description,
             )
+            tx.idempotency_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+            record_audit_event(db, action="DEPOSIT_CREATED", resource_type="DEPOSIT", resource_id=tx.id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"amount_cents": data.amount_cents})
+            db.commit()
         except IdempotencyConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc))
 
@@ -493,6 +499,7 @@ def list_exchange_rates():
 @router.post("/transfers/{transfer_id}/refund", response_model=TransferResponse, status_code=201)
 def refund_transfer(
     transfer_id: UUID,
+    request: Request,
     idempotency_key: str = Header(
         min_length=1,
         max_length=100,
@@ -562,14 +569,14 @@ def refund_transfer(
         if replay_tx is not None:
             if replay_tx.request_hash is not None and replay_tx.request_hash != refund_hash:
                 raise HTTPException(status_code=409, detail="Idempotency key used for different refund")
-            return TransferResponse(
-                transaction_id=str(replay_tx.id),
-                status=replay_tx.status.value,
-                amount_cents=transfer_amount,
-                source_account_id=str(orig_dest_id),
-                destination_account_id=str(orig_source_id),
-                created_at=replay_tx.created_at.isoformat(),
-            )
+                return TransferResponse(
+                    transaction_id=str(replay_tx.id),
+                    status=replay_tx.status.value,
+                    amount_cents=transfer_amount,
+                    source_account_id=str(orig_dest_id),
+                    destination_account_id=str(orig_source_id),
+                    created_at=replay_tx.created_at.isoformat(),
+                )
 
         existing_refund = db.scalar(
             select(Transaction).where(
@@ -645,6 +652,8 @@ def refund_transfer(
             db.rollback()
             raise HTTPException(status_code=400, detail=str(exc))
 
+        record_audit_event(db, action="TRANSFER_REFUND", resource_type="TRANSACTION", resource_id=transfer_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
+        db.commit()
         return TransferResponse(
             transaction_id=str(refund_tx.id),
             status=refund_tx.status.value,
@@ -653,3 +662,44 @@ def refund_transfer(
             destination_account_id=str(orig_source_id),
             created_at=refund_tx.created_at.isoformat(),
         )
+
+
+@router.post("/deposits/request", status_code=201)
+def request_deposit_approval(data: DepositCreate, request: Request, current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.DEPOSIT_CREATE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    with SessionLocal() as db:
+        req = ApprovalRequest(action_type="DEPOSIT", target_id=data.account_id, payload={"amount_cents": data.amount_cents}, requested_by=current_user.id)
+        db.add(req)
+        db.flush()
+        record_audit_event(db, action="DEPOSIT_REQUESTED", resource_type="DEPOSIT", resource_id=req.id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"amount_cents": data.amount_cents})
+        db.commit()
+        return {"id": str(req.id), "status": req.status}
+
+
+@router.post("/deposits/{approval_id}/approve", status_code=200)
+def approve_deposit_request(approval_id: UUID, request: Request, current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.DEPOSIT_CREATE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    with SessionLocal() as db:
+        req = db.get(ApprovalRequest, approval_id)
+        if req is None or req.action_type != "DEPOSIT":
+            raise HTTPException(status_code=404, detail="Deposit approval request not found")
+        if req.status != "PENDING":
+            raise HTTPException(status_code=409, detail="Approval request already resolved")
+        if req.requested_by == current_user.id:
+            raise HTTPException(status_code=409, detail="Four-eyes violation: requester cannot approve")
+        target = db.get(Account, req.target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Target account not found")
+        sys_acct = db.scalar(select(Account).where(Account.account_type == AccountType.SYSTEM, Account.currency == target.currency))
+        if sys_acct is None:
+            raise HTTPException(status_code=500, detail="System funding account not found")
+        amt = int(req.payload["amount_cents"])
+        tx = post_transaction(db, idempotency_key=f"dep-appr:{req.id}", idempotency_scope=f"deposit:{target.id}", description="Approved deposit", entries=[EntryInput(sys_acct.id, -amt), EntryInput(target.id, amt)])
+        req.status = "APPROVED"
+        req.approved_by = current_user.id
+        req.resolved_at = datetime.now(timezone.utc)
+        record_audit_event(db, action="DEPOSIT_APPROVED", resource_type="DEPOSIT", resource_id=tx.id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"approval_id": str(req.id), "amount_cents": amt})
+        db.commit()
+        return {"id": str(req.id), "status": req.status, "transaction_id": str(tx.id)}

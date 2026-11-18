@@ -1,4 +1,4 @@
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 HTTP_REQUESTS_TOTAL = Counter(
     "finguard_http_requests_total",
@@ -29,6 +29,17 @@ RATE_LIMIT_HITS_TOTAL = Counter(
     "finguard_rate_limit_hits_total",
     "Total rate limit 429 rejections",
     ["limiter"],
+)
+
+
+LEDGER_RECONCILIATION_IMBALANCE = Gauge(
+    "finguard_ledger_reconciliation_imbalance",
+    "Ledger reconciliation status (0 = reconciled, 1 = imbalance detected)",
+)
+
+LEDGER_RECONCILIATION_LAST_RUN_TIMESTAMP = Gauge(
+    "finguard_ledger_reconciliation_last_run_timestamp_seconds",
+    "Unix timestamp of last ledger reconciliation run",
 )
 
 

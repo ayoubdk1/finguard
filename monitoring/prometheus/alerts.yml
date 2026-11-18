@@ -1,0 +1,11 @@
+groups:
+  - name: finguard_ledger_alerts
+    rules:
+      - alert: LedgerReconciliationImbalance
+        expr: finguard_ledger_reconciliation_imbalance != 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FinGuard ledger reconciliation imbalance detected"
+          description: "reconcile_ledger reported a non-zero imbalance."
