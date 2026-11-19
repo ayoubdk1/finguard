@@ -278,3 +278,8 @@ class LoginHistoryItem(BaseModel):
     success: bool
     failure_reason: str | None = None
     created_at: datetime
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
