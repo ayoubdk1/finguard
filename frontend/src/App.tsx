@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { LoginForm } from './LoginForm'
 import { UserManagement } from './UserManagement'
+import SecuritySettings from './SecuritySettings'
 import {
   getCurrentUser,
   logoutUser,
@@ -164,6 +165,12 @@ const Icons: Record<string, ReactNode> = {
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   ),
+  Security: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
 }
 
 // ============================================
@@ -178,6 +185,7 @@ const menuItems = [
   { label: 'Fraud Detection' },
   { label: 'Event Monitoring' },
   { label: 'Users' },
+  { label: 'Security' },
 ]
 
 type AccountMovement = TransactionHistoryItem & {
@@ -317,7 +325,7 @@ function App() {
     | 'Transactions'
     | 'Fraud Detection'
     | 'Event Monitoring'
-    | 'Users'
+    | 'Users' | 'Security'
   >('Dashboard')
 
   // ============================================
@@ -602,6 +610,21 @@ function App() {
 
     setShowTransferModal(true)
   }
+
+  const transferModalRef = useRef<HTMLElement | null>(null)
+  const lastFocusRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!showTransferModal) return
+    lastFocusRef.current = document.activeElement as HTMLElement | null
+    transferModalRef.current?.focus()
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowTransferModal(false) }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      lastFocusRef.current?.focus()
+    }
+  }, [showTransferModal])
 
   function closeTransferModal() {
     if (transferSubmitting) return
@@ -1005,15 +1028,14 @@ function App() {
           <p className="section-label">WORKSPACE</p>
 
           <nav aria-label="Main navigation">
-            {menuItems.map((item) => {
+            {menuItems.filter((item) => !((item.label === 'Fraud Detection' || item.label === 'Event Monitoring') && currentUser?.role === 'CUSTOMER')).map((item) => {
               const available =
                 item.label === 'Dashboard' ||
                 item.label === 'Accounts' ||
                 item.label === 'Transfers' ||
                 item.label === 'Transactions' ||
-                item.label === 'Fraud Detection' ||
-                item.label === 'Event Monitoring' ||
-                (item.label === 'Users' && currentUser?.role === 'ADMIN')
+                (item.label === 'Users' && currentUser?.role === 'ADMIN') ||
+                item.label === 'Security' || (item.label === 'Fraud Detection' && currentUser?.role !== 'CUSTOMER') || (item.label === 'Event Monitoring' && currentUser?.role !== 'CUSTOMER') || (item.label === 'Fraud Detection' && currentUser?.role !== 'CUSTOMER') || (item.label === 'Event Monitoring' && currentUser?.role !== 'CUSTOMER')
 
               return (
                 <button
@@ -1035,7 +1057,8 @@ function App() {
                       item.label === 'Transactions' ||
                       item.label === 'Fraud Detection' ||
                       item.label === 'Event Monitoring' ||
-                      item.label === 'Users'
+                      item.label === 'Users' ||
+                      item.label === 'Security'
                     ) {
                       setActivePage(item.label)
                     }
@@ -1160,6 +1183,8 @@ function App() {
                       ? 'FRAUD INTELLIGENCE'
                       : activePage === 'Users'
                         ? 'ADMINISTRATION'
+                        : activePage === 'Security'
+                          ? 'ACCOUNT SECURITY'
                         : 'EVENT-DRIVEN ARCHITECTURE'}
             </p>
 
@@ -1176,6 +1201,8 @@ function App() {
                       ? 'Analyze transaction risk using rules and machine learning.'
                       : activePage === 'Users'
                         ? 'Manage user accounts, statuses, login history, and active sessions.'
+                        : activePage === 'Security'
+                          ? 'Manage two-factor authentication, password, and active sessions.'
                         : 'Monitor transactional outbox events and consumer processing.'}
             </p>
           </div>
@@ -1762,11 +1789,15 @@ function App() {
           <UserManagement />
         )}
 
+        {activePage === 'Security' && (
+          <SecuritySettings currentUser={currentUser} onUserUpdated={async () => { setCurrentUser(await getCurrentUser()) }} />
+        )}
+
         {/* ============================================ */}
         {/* FRAUD DETECTION PAGE */}
         {/* ============================================ */}
 
-        {activePage === 'Fraud Detection' && (
+        {activePage === 'Fraud Detection' && currentUser?.role !== 'CUSTOMER' && (
           <section className="risk-page">
             <div className="risk-page-header">
               <div>
@@ -2017,7 +2048,7 @@ function App() {
         {/* EVENT MONITORING PAGE */}
         {/* ============================================ */}
 
-        {activePage === 'Event Monitoring' && (
+        {activePage === 'Event Monitoring' && currentUser?.role !== 'CUSTOMER' && (
           <section className="events-page">
             {/* HEADER */}
 
@@ -2300,6 +2331,8 @@ function App() {
       {showTransferModal && (
         <div className="transfer-overlay" onClick={closeTransferModal}>
           <section
+            ref={transferModalRef}
+            tabIndex={-1}
             className="transfer-modal"
             role="dialog"
             aria-modal="true"

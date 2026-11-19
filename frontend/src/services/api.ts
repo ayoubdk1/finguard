@@ -602,3 +602,45 @@ export async function revokeAdminUserSession(userId: string, sessionId: string):
     throw new Error('Failed to revoke session')
   }
 }
+
+
+export interface MfaSetupData {
+  secret: string
+  otpauth_uri: string
+  issuer?: string
+}
+
+export async function setupMfa(): Promise<MfaSetupData> {
+  const res = await fetch(`${API_BASE_URL}/auth/mfa/setup`, { method: 'POST', headers: authHeaders() })
+  return handleAdminResponse<MfaSetupData>(res, 'Failed to start MFA setup')
+}
+
+export async function enableMfa(code: string): Promise<{ status: string; backup_codes: string[] }> {
+  const res = await fetch(`${API_BASE_URL}/auth/mfa/enable`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+  return handleAdminResponse<{ status: string; backup_codes: string[] }>(res, 'Failed to enable MFA')
+}
+
+export async function disableMfa(password: string, code: string): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE_URL}/auth/mfa/disable`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ password, code }) })
+  return handleAdminResponse<{ status: string }>(res, 'Failed to disable MFA')
+}
+
+export async function regenerateBackupCodes(): Promise<{ backup_codes: string[] }> {
+  const res = await fetch(`${API_BASE_URL}/auth/mfa/backup-codes/regenerate`, { method: 'POST', headers: authHeaders() })
+  return handleAdminResponse<{ backup_codes: string[] }>(res, 'Failed to regenerate backup codes')
+}
+
+export async function getMySessions(): Promise<ActiveSessionList> {
+  const res = await fetch(`${API_BASE_URL}/auth/sessions`, { headers: authHeaders() })
+  return handleAdminResponse<ActiveSessionList>(res, 'Failed to load sessions')
+}
+
+export async function revokeMySession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/auth/sessions/${sessionId}`, { method: 'DELETE', headers: authHeaders() })
+  if (!res.ok) throw new Error('Failed to revoke session')
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE_URL}/auth/change-password`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) })
+  return handleAdminResponse<{ status: string }>(res, 'Failed to change password')
+}

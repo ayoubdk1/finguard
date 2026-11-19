@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db.models import LoginHistory, MfaTokenState, User
 from app.db.session import SessionLocal
 from app.schemas.auth import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     LoginRequest,
@@ -294,6 +295,26 @@ def reset_password(request: Request, payload: ResetPasswordRequest):
         revoke_all_user_sessions(session, user.id)
         session.commit()
         return {"status": "password_reset_success"}
+
+
+
+@router.post("/auth/change-password", status_code=status.HTTP_200_OK)
+def change_password(request: Request, payload: ChangePasswordRequest, current_user: User = Depends(get_current_user)):
+    try:
+        validate_password_policy(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be different from current password")
+    with SessionLocal() as session:
+        user = session.get(User, current_user.id)
+        if user is None or not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+        user.password_hash = hash_password(payload.new_password)
+        record_audit_event(session, action="PASSWORD_CHANGED", resource_type="USER", resource_id=user.id, actor_id=user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
+        revoke_all_user_sessions(session, user.id)
+        session.commit()
+        return {"status": "password_changed"}
 
 
 @router.get("/auth/me", response_model=RegisterResponse, status_code=status.HTTP_200_OK)
