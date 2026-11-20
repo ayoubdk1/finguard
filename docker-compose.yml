@@ -71,7 +71,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       FINGUARD_CORS_ORIGINS: ${FINGUARD_CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
     command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     ports:
       - "8001:8000"
     healthcheck:

@@ -9,6 +9,9 @@ async function mockApi(page: Page) {
     if (url.includes('/auth/me')) {
       return route.fulfill({ json: { id: 'u1', email: 'admin@finguard.com', full_name: 'FinGuard Admin', role: 'ADMIN', status: 'ACTIVE', mfa_enabled: false } })
     }
+    if (url.endsWith('/accounts')) {
+      return route.fulfill({ json: [{ id: 'acc-1', user_id: 'u1', name: 'Main', account_type: 'CUSTOMER', currency: 'EUR', created_at: '2026-01-01T00:00:00Z' }, { id: 'acc-2', user_id: 'u1', name: 'Savings', account_type: 'CUSTOMER', currency: 'EUR', created_at: '2026-01-01T00:00:00Z' }] })
+    }
     if (url.includes('/balance')) {
       return route.fulfill({ json: { account_id: 'acc-1', balance_cents: 150000, currency: 'EUR' } })
     }

@@ -1,6 +1,8 @@
 import hashlib
+import logging
 import os
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -10,6 +12,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import RefreshToken
+
+logger = logging.getLogger("finguard.security")
 
 JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "finguard"
@@ -324,3 +328,35 @@ def revoke_all_user_sessions(db: Session, user_id: UUID) -> None:
         .values(revoked_at=now)
     )
     db.flush()
+
+
+_revoked_jtis: dict[str, float] = {}
+
+
+def revoke_access_token(jti: str, exp: int | float) -> None:
+    ttl = max(1, int(exp - time.time()))
+    _revoked_jtis[jti] = time.time() + ttl
+    try:
+        from app.security.rate_limit import _get_redis_client
+        r = _get_redis_client()
+        if r is not None:
+            r.setex(f"finguard:revoked_jti:{jti}", ttl, "1")
+    except Exception as exc:
+        logger.warning("Redis jti revocation fallback: %s", exc)
+
+
+def is_access_token_revoked(jti: str) -> bool:
+    now = time.time()
+    exp_ts = _revoked_jtis.get(jti)
+    if exp_ts is not None:
+        if exp_ts > now:
+            return True
+        _revoked_jtis.pop(jti, None)
+    try:
+        from app.security.rate_limit import _get_redis_client
+        r = _get_redis_client()
+        if r is not None and r.get(f"finguard:revoked_jti:{jti}") == "1":
+            return True
+    except Exception as exc:
+        logger.warning("Redis jti revocation fallback: %s", exc)
+    return False

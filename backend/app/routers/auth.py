@@ -54,10 +54,12 @@ from app.security.tokens import (
     get_active_sessions_for_user,
     get_refresh_token_family_id,
     issue_refresh_token,
+    revoke_access_token,
     revoke_all_user_sessions,
     revoke_refresh_token,
     revoke_session_by_id,
     rotate_refresh_token,
+    verify_access_token_claims,
     verify_mfa_token_with_jti,
     verify_password_reset_token,
 )
@@ -114,7 +116,14 @@ def refresh_access_token(request: Request, payload: RefreshRequest):
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout_user(payload: LogoutRequest):
+def logout_user(request: Request, payload: LogoutRequest):
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            claims = verify_access_token_claims(auth.split(" ", 1)[1].strip())
+            revoke_access_token(str(claims["jti"]), float(claims["exp"]))
+        except ValueError:
+            pass
     with SessionLocal() as session:
         revoke_refresh_token(session, payload.refresh_token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import logging
 import os
 import threading
@@ -33,13 +34,39 @@ def _get_redis_client() -> redis.Redis | None:
     return redis.Redis.from_url(redis_url, socket_connect_timeout=0.3, socket_timeout=0.3, decode_responses=True)
 
 
+def _is_trusted_proxy(host: str) -> bool:
+    env = os.getenv("FINGUARD_ENV", "development").lower()
+    raw = os.getenv("FINGUARD_TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" + (",testclient" if env != "production" else ""))
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if host in entries:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    for e in entries:
+        try:
+            if "/" in e and ip in ipaddress.ip_network(e, strict=False):
+                return True
+            if "/" not in e and ip == ipaddress.ip_address(e):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def extract_client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else "unknown"
+    if not _is_trusted_proxy(peer):
+        return peer
     xff = request.headers.get("x-forwarded-for", "").strip()
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    return request.client.host if request.client else "unknown"
+    if not xff:
+        return peer
+    hops = [h.strip() for h in xff.split(",") if h.strip()]
+    for hop in reversed(hops):
+        if not _is_trusted_proxy(hop):
+            return hop
+    return hops[0] if hops else peer
 
 
 def _check_in_memory(bucket_key: str, max_attempts: int, window_seconds: float, detail: str) -> None:

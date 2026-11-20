@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditLog, Transaction
+from app.security.rate_limit import extract_client_ip
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]{1,2})[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 IPV4_RE = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}\b")
@@ -39,14 +40,9 @@ def mask_pii_in_text(text: str) -> str:
     return IPV4_RE.sub(r"\1.***", text)
 
 
-def get_client_ip(request: Request | None) -> str | None:
-    if request is None:
-        return None
-    fwd = request.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else None
-
+def get_client_ip(request: Request) -> str | None:
+    ip = extract_client_ip(request)
+    return None if ip == "unknown" else ip[:45]
 
 def get_request_id(request: Request | None) -> str | None:
     if request is None:
