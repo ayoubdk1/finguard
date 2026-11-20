@@ -1,3 +1,4 @@
+import * as apiClient from './services/api'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { LoginForm } from './LoginForm'
@@ -29,17 +30,9 @@ import './App.css'
 const ALICE_ACCOUNT_ID = '007c9f83-03db-48fd-bdae-9024fea8f52a'
 const BOB_ACCOUNT_ID = 'b72238cf-a238-4fac-81a1-6421f192f7c7'
 
-const customerAccounts = [
-  {
-    id: ALICE_ACCOUNT_ID,
-    name: 'Alice',
-    type: 'CUSTOMER',
-  },
-  {
-    id: BOB_ACCOUNT_ID,
-    name: 'Bob',
-    type: 'CUSTOMER',
-  },
+const FALLBACK_DEMO_ACCOUNTS = [
+  { id: ALICE_ACCOUNT_ID, name: 'Alice', currency: 'TND', type: 'CUSTOMER' },
+  { id: BOB_ACCOUNT_ID, name: 'Bob', currency: 'TND', type: 'CUSTOMER' },
 ]
 
 // ============================================
@@ -193,24 +186,18 @@ type AccountMovement = TransactionHistoryItem & {
   accountName: string
 }
 
-async function loadAccountMovements(): Promise<AccountMovement[]> {
-  const [aliceHistory, bobHistory] = await Promise.all([
-    getAccountTransactions(ALICE_ACCOUNT_ID),
-    getAccountTransactions(BOB_ACCOUNT_ID),
-  ])
-
-  const movements: AccountMovement[] = [
-    ...aliceHistory.transactions.map((tx) => ({
+async function loadAccountMovements(
+  accountsList: { id: string; name: string }[]
+): Promise<AccountMovement[]> {
+  if (accountsList.length === 0) return []
+  const histories = await Promise.all(accountsList.map((a) => getAccountTransactions(a.id)))
+  const movements: AccountMovement[] = histories.flatMap((hist, idx) =>
+    hist.transactions.map((tx) => ({
       ...tx,
-      accountId: ALICE_ACCOUNT_ID,
-      accountName: 'Alice',
-    })),
-    ...bobHistory.transactions.map((tx) => ({
-      ...tx,
-      accountId: BOB_ACCOUNT_ID,
-      accountName: 'Bob',
-    })),
-  ]
+      accountId: accountsList[idx].id,
+      accountName: accountsList[idx].name,
+    }))
+  )
 
   return movements.sort(
     (a, b) =>
@@ -420,6 +407,26 @@ function App() {
   const [movementsError, setMovementsError] = useState('')
 
   const [movementsRefreshKey, setMovementsRefreshKey] = useState(0)
+  const [accounts, setAccounts] = useState(FALLBACK_DEMO_ACCOUNTS)
+
+  useEffect(() => {
+    let cancelled = false
+    async function fetchAccounts() {
+      try {
+        const fn = apiClient.getAccounts
+        if (typeof fn !== 'function') return
+        const list = await fn()
+        if (!cancelled && Array.isArray(list)) {
+          const mapped = list.map((a) => ({ id: a.id, name: a.name, currency: a.currency, type: a.account_type }))
+          setAccounts(mapped)
+        }
+      } catch {
+        // Keep existing state on transient error
+      }
+    }
+    void fetchAccounts()
+    return () => { cancelled = true }
+  }, [currentUser, overviewRefreshKey])
 
   // ============================================
   // LOAD REAL ACCOUNT BALANCES
@@ -433,10 +440,7 @@ function App() {
       setBalanceError('')
 
       try {
-        const results = await Promise.all([
-          getAccountBalance(ALICE_ACCOUNT_ID),
-          getAccountBalance(BOB_ACCOUNT_ID),
-        ])
+        const results = await Promise.all(accounts.map((a) => getAccountBalance(a.id)))
 
         if (!cancelled) {
           setBalances(results)
@@ -458,7 +462,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [overviewRefreshKey])
+  }, [overviewRefreshKey, accounts])
 
   // ============================================
   // LOAD REAL TRANSACTION HISTORY
@@ -473,7 +477,7 @@ function App() {
 
       try {
         const response = await getAccountTransactions(
-          ALICE_ACCOUNT_ID
+          accounts[0]?.id ?? ALICE_ACCOUNT_ID
         )
 
         if (!cancelled) {
@@ -500,7 +504,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [overviewRefreshKey])
+  }, [overviewRefreshKey, accounts])
 
   // ============================================
   // CALCULATE TOTAL BALANCE
@@ -522,7 +526,7 @@ function App() {
       setMovementsLoading(true)
 
       try {
-        const results = await loadAccountMovements()
+        const results = await loadAccountMovements(accounts)
 
         if (!cancelled) {
           setAllMovements(results)
@@ -548,17 +552,12 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [movementsRefreshKey])
+  }, [movementsRefreshKey, accounts])
 
   const visibleMovements = allMovements.filter((tx) => {
     if (movementFilter === 'all') return true
-
-    return (
-      tx.accountId ===
-      (movementFilter === 'alice'
-        ? ALICE_ACCOUNT_ID
-        : BOB_ACCOUNT_ID)
-    )
+    if (movementFilter === 'alice') return tx.accountId === (accounts[0]?.id ?? ALICE_ACCOUNT_ID)
+    return tx.accountId === (accounts[1]?.id ?? BOB_ACCOUNT_ID)
   })
 
   // ============================================
@@ -580,11 +579,11 @@ function App() {
     const saved = pendingTransfer ?? readPendingTransfer()
 
     setTransferFrom(
-      saved?.payload.source_account_id ?? ALICE_ACCOUNT_ID
+      saved?.payload.source_account_id ?? accounts[0]?.id ?? ALICE_ACCOUNT_ID
     )
 
     setTransferTo(
-      saved?.payload.destination_account_id ?? BOB_ACCOUNT_ID
+      saved?.payload.destination_account_id ?? accounts[1]?.id ?? accounts[0]?.id ?? BOB_ACCOUNT_ID
     )
 
     setTransferAmount(
@@ -775,10 +774,7 @@ function App() {
 
       // 4. Refresh balances from PostgreSQL
       try {
-        const updatedBalances = await Promise.all([
-          getAccountBalance(ALICE_ACCOUNT_ID),
-          getAccountBalance(BOB_ACCOUNT_ID),
-        ])
+        const updatedBalances = await Promise.all(accounts.map((a) => getAccountBalance(a.id)))
 
         setBalances(updatedBalances)
       } catch (error) {
@@ -1551,7 +1547,7 @@ function App() {
             </div>
 
             <div className="account-grid">
-              {customerAccounts.map((account) => {
+              {accounts.map((account) => {
                 const accountBalance = balances?.find(
                   (item) => item.account_id === account.id
                 )

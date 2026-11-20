@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.db.models import Account, User
 from app.db.session import SessionLocal
 from app.security.permissions import Permission, has_permission
-from app.security.tokens import verify_access_token, verify_access_token_claims
+from app.security.tokens import is_access_token_revoked, verify_access_token_claims
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -41,7 +41,10 @@ def get_current_user(
         )
 
     try:
-        user_id = verify_access_token(credentials.credentials)
+        claims = verify_access_token_claims(credentials.credentials)
+        if is_access_token_revoked(str(claims["jti"])):
+            raise ValueError("Access token has been revoked")
+        user_id = UUID(str(claims["sub"]))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

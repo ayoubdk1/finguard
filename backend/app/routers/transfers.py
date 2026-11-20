@@ -227,6 +227,31 @@ def create_transfer(
             src_acct = db.get(Account, data.source_account_id)
             dst_acct = db.get(Account, data.destination_account_id)
             is_fx_replay = bool(src_acct and dst_acct and src_acct.currency != dst_acct.currency)
+            rep_conv, rep_fee, rep_rate = None, None, None
+            if is_fx_replay and src_acct and dst_acct:
+                fx_del = db.scalar(
+                    select(Transaction).where(
+                        Transaction.idempotency_scope == f"{tx_scope}:fx_delivery",
+                        Transaction.idempotency_key == f"{idempotency_key}:fx_delivery",
+                    )
+                )
+                if fx_del is not None:
+                    pos_del = [e for e in fx_del.entries if e.amount > 0]
+                    if pos_del:
+                        rep_conv = pos_del[0].amount
+                fee_row = db.scalar(
+                    select(LedgerEntry)
+                    .join(Account, Account.id == LedgerEntry.account_id)
+                    .where(
+                        LedgerEntry.transaction_id == replay_tx.id,
+                        Account.name == "SYSTEM_FX_FEE_REVENUE",
+                    )
+                )
+                rep_fee = fee_row.amount if fee_row is not None else 0
+                try:
+                    rep_rate = float(Decimal(get_latest_rate(db, src_acct.currency, dst_acct.currency).rate) / Decimal(1_000_000))
+                except ExchangeRateNotFound:
+                    rep_rate = None
             return {
                 "transaction_id": replay_tx.id,
                 "status": replay_tx.status,
@@ -236,9 +261,9 @@ def create_transfer(
                 "currency": src_acct.currency if src_acct else "USD",
                 "is_fx": is_fx_replay,
                 "target_currency": dst_acct.currency if (is_fx_replay and dst_acct) else None,
-                "converted_amount_cents": None,
-                "fee_cents": None,
-                "exchange_rate": None,
+                "converted_amount_cents": rep_conv,
+                "fee_cents": rep_fee,
+                "exchange_rate": rep_rate,
                 "source_balance_cents": get_balance(db, data.source_account_id),
                 "destination_balance_cents": get_balance(db, data.destination_account_id),
             }
@@ -273,7 +298,6 @@ def create_transfer(
                         raise HTTPException(status_code=409, detail="SYSTEM_FX clearing account not configured")
                     sys_fx_src_id = fx_src_acct.id
                     sys_fx_dst_id = fx_dst_acct.id
-                    lock_ids.extend([sys_fx_src_id, sys_fx_dst_id])
 
                 # Lock all 2 or 4 accounts once in sorted UUID order
                 ordered_ids = sorted(set(lock_ids))
@@ -294,6 +318,68 @@ def create_transfer(
                     check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
                 except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+                # Pre-settlement fraud scoring (before ledger posting)
+                now_utc = datetime.now(timezone.utc)
+                ten_min_ago = now_utc - timedelta(minutes=10)
+                one_hour_ago = now_utc - timedelta(hours=1)
+                transfers_10m = int(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(LedgerEntry)
+                        .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
+                        .where(
+                            LedgerEntry.account_id == source.id,
+                            LedgerEntry.amount < 0,
+                            Transaction.created_at >= ten_min_ago,
+                        )
+                    )
+                    or 0
+                )
+                src_created = source.created_at
+                if src_created.tzinfo is None:
+                    src_created = src_created.replace(tzinfo=timezone.utc)
+                account_age_min = max(0, int((now_utc - src_created).total_seconds() // 60))
+                failed_1h = int(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(TransferAttempt)
+                        .where(
+                            TransferAttempt.source_account_id == source.id,
+                            TransferAttempt.created_at >= one_hour_ago,
+                        )
+                    )
+                    or 0
+                )
+                risk = assess_transaction_risk(
+                    amount_cents=data.amount_cents,
+                    transfers_last_10min=transfers_10m,
+                    account_age_minutes=account_age_min,
+                    failed_transfers_last_hour=failed_1h,
+                )
+                FRAUD_RISK_SCORE.observe(float(risk.get("rules_risk_score", 0)))
+                if risk.get("rules_decision") == "SIMULATED_HOLD":
+                    raw_score = risk.get("ml_probability")
+                    if raw_score is None:
+                        raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
+                    reasons = risk.get("reason_codes") or ["SIMULATED_HOLD"]
+                    db.add(TransferAttempt(
+                        source_account_id=source.id,
+                        destination_account_id=destination.id,
+                        amount_cents=data.amount_cents,
+                        currency=source.currency,
+                        reason="FRAUD_HOLD",
+                    ))
+                    db.add(FraudAlert(
+                        transaction_id=None,
+                        account_id=source.id,
+                        risk_score=int(round(float(raw_score) * 1000)),
+                        reasons=reasons,
+                        status=FraudAlertStatus.PENDING.value,
+                    ))
+                    db.commit()
+                    TRANSFERS_TOTAL.labels(currency=source.currency, status="BLOCKED").inc()
+                    raise HTTPException(status_code=403, detail="Transfer blocked by fraud policy (SIMULATED_HOLD)")
 
                 converted_amount_cents = None
                 fee_cents = None
@@ -331,15 +417,38 @@ def create_transfer(
                         fee_bps=fx_rate.fee_bps,
                     )
 
+                    entries: list[EntryInput] = [
+                        EntryInput(source.id, -data.amount_cents),
+                        EntryInput(sys_fx_src_id, data.amount_cents - fee_cents),
+                    ]
+                    if fee_cents > 0:
+                        fee_account = db.scalar(
+                            select(Account).where(
+                                Account.name == "SYSTEM_FX_FEE_REVENUE",
+                                Account.currency == source.currency,
+                            )
+                        )
+                        if fee_account is None:
+                            fee_account = Account(
+                                name="SYSTEM_FX_FEE_REVENUE",
+                                account_type=AccountType.SYSTEM,
+                                currency=source.currency,
+                            )
+                            db.add(fee_account)
+                            db.flush()
+                        entries.append(EntryInput(fee_account.id, fee_cents))
+                    else:
+                        entries = [
+                            EntryInput(source.id, -data.amount_cents),
+                            EntryInput(sys_fx_src_id, data.amount_cents),
+                        ]
+
                     tx = post_transaction(
                         session=db,
                         idempotency_key=idempotency_key,
                         idempotency_scope=tx_scope,
                         request_hash=tx_hash,
-                        entries=[
-                            EntryInput(source.id, -data.amount_cents),
-                            EntryInput(sys_fx_src_id, data.amount_cents),
-                        ],
+                        entries=entries,
                         description=data.description,
                         before_commit=lambda session, tx: enqueue_transfer_posted(
                             session=session,
@@ -365,48 +474,23 @@ def create_transfer(
                     )
                     db.commit()
 
-                # Fraud scoring & alert creation
-                now_utc = datetime.now(timezone.utc)
-                ten_min_ago = now_utc - timedelta(minutes=10)
-                one_hour_ago = now_utc - timedelta(hours=1)
-                transfers_10m = int(
-                    db.scalar(
-                        select(func.count())
-                        .select_from(LedgerEntry)
-                        .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
-                        .where(
-                            LedgerEntry.account_id == source.id,
-                            LedgerEntry.amount < 0,
-                            Transaction.created_at >= ten_min_ago,
-                        )
-                    )
-                    or 0
-                )
-                src_created = source.created_at
-                if src_created.tzinfo is None:
-                    src_created = src_created.replace(tzinfo=timezone.utc)
-                account_age_min = max(0, int((now_utc - src_created).total_seconds() // 60))
-                failed_1h = int(
-                    db.scalar(
-                        select(func.count())
-                        .select_from(LedgerEntry)
-                        .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
-                        .where(
-                            LedgerEntry.account_id == source.id,
-                            Transaction.status == TransactionStatus.FAILED,
-                            Transaction.created_at >= one_hour_ago,
-                        )
-                    )
-                    or 0
-                )
-                risk = assess_transaction_risk(
-                    amount_cents=data.amount_cents,
-                    transfers_last_10min=transfers_10m,
-                    account_age_minutes=account_age_min,
-                    failed_transfers_last_hour=failed_1h,
-                )
-                FRAUD_RISK_SCORE.observe(float(risk.get("rules_risk_score", 0)))
                 TRANSFERS_TOTAL.labels(currency=source.currency, status="COMPLETED").inc()
+                if risk.get("review_recommended"):
+                    existing_alert = db.scalar(select(FraudAlert).where(FraudAlert.transaction_id == tx.id))
+                    if existing_alert is None:
+                        raw_score = risk.get("ml_probability")
+                        if raw_score is None:
+                            raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
+                        db.add(
+                            FraudAlert(
+                                transaction_id=tx.id,
+                                account_id=source.id,
+                                risk_score=int(round(float(raw_score) * 1000)),
+                                reasons=risk.get("reason_codes") or ["ML_ANOMALY"],
+                                status=FraudAlertStatus.PENDING.value,
+                            )
+                        )
+                        db.commit()
                 if risk.get("review_recommended"):
                     existing_alert = db.scalar(
                         select(FraudAlert).where(FraudAlert.transaction_id == tx.id)
@@ -520,10 +604,11 @@ def refund_transfer(
 
         # Sort entries: debit entry (negative) and credit entry (positive)
         entries = sorted(original_tx.entries, key=lambda e: e.amount)
-        if len(entries) != 2:
+        if len(entries) < 2:
             raise HTTPException(status_code=400, detail="Cannot refund non-transfer transaction")
 
-        debit_entry, credit_entry = entries[0], entries[1]
+        debit_entry = entries[0]
+        credit_entry = max(entries[1:], key=lambda e: e.amount)
         orig_source_id = debit_entry.account_id
         orig_dest_id = credit_entry.account_id
         transfer_amount = credit_entry.amount

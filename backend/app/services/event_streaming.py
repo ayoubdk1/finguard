@@ -79,10 +79,9 @@ def publish_batch(
     jitter_ratio: float = 0.2,
     use_circuit_breaker: bool = False,
 ) -> int:
-    """Publish up to batch_size PENDING events; mark DEAD when publish_attempts reaches max_attempts."""
+    """Claim, publish without holding DB locks across Kafka I/O, and finalize status."""
     published = 0
     for _ in range(batch_size):
-        failure = None
         now = datetime.now(timezone.utc)
         with session_factory() as db:
             with db.begin():
@@ -92,10 +91,7 @@ def publish_batch(
                         OutboxEvent.published_at.is_(None),
                         OutboxEvent.status == OutboxStatus.PENDING.value,
                         OutboxEvent.event_type == "TransferPosted",
-                        or_(
-                            OutboxEvent.next_attempt_at.is_(None),
-                            OutboxEvent.next_attempt_at <= now,
-                        ),
+                        or_(OutboxEvent.next_attempt_at.is_(None), OutboxEvent.next_attempt_at <= now),
                     )
                     .order_by(OutboxEvent.created_at, OutboxEvent.id)
                     .limit(1)
@@ -103,56 +99,47 @@ def publish_batch(
                 )
                 if event is None:
                     return published
-
                 event.publish_attempts += 1
-                envelope = make_envelope(event)
-                key_str = str(event.aggregate_id)
+                event.next_attempt_at = now + timedelta(seconds=30)
+                event_id, attempts, envelope, key_str = event.id, event.publish_attempts, make_envelope(event), str(event.aggregate_id)
 
-                def _deliver(k=key_str, e=envelope):
-                    send_json(producer, TOPIC, k, e)
+        failure = None
+        def _deliver(k=key_str, e=envelope):
+            send_json(producer, TOPIC, k, e)
+        try:
+            if use_circuit_breaker:
+                kafka_circuit_breaker.call(lambda: retry_with_backoff(_deliver, max_attempts=2, base_delay_seconds=0.05, max_delay_seconds=0.2, jitter_ratio=jitter_ratio))
+            else:
+                _deliver()
+        except Exception as exc:
+            failure = exc
 
-                try:
-                    if use_circuit_breaker:
-                        kafka_circuit_breaker.call(
-                            lambda: retry_with_backoff(
-                                _deliver,
-                                max_attempts=2,
-                                base_delay_seconds=0.05,
-                                max_delay_seconds=0.2,
-                                jitter_ratio=jitter_ratio,
-                            )
-                        )
+        fin_now = datetime.now(timezone.utc)
+        with session_factory() as db:
+            with db.begin():
+                claimed = db.get(OutboxEvent, event_id)
+                if claimed is not None:
+                    if failure is None:
+                        claimed.published_at = fin_now
+                        claimed.status = OutboxStatus.PUBLISHED.value
+                        claimed.last_error = None
+                        claimed.next_attempt_at = None
+                        published += 1
                     else:
-                        _deliver()
-                except Exception as exc:
-                    failure = exc
-                    event.last_error = str(exc)[:500]
-                    if event.publish_attempts >= max_attempts:
-                        event.status = OutboxStatus.DEAD.value
-                        event.next_attempt_at = None
-                        logger.error(
-                            f"OutboxEvent {event.id} reached max_attempts={max_attempts}; marked DEAD: {exc}"
-                        )
-                    elif base_backoff_seconds > 0:
-                        delay = calculate_backoff_delay(
-                            event.publish_attempts,
-                            base_delay_seconds=base_backoff_seconds,
-                            max_delay_seconds=60.0,
-                            jitter_ratio=jitter_ratio,
-                        )
-                        event.next_attempt_at = now + timedelta(seconds=delay)
-                else:
-                    event.published_at = now
-                    event.status = OutboxStatus.PUBLISHED.value
-                    event.last_error = None
-                    event.next_attempt_at = None
-                    published += 1
-
+                        claimed.last_error = str(failure)[:500]
+                        if attempts >= max_attempts:
+                            claimed.status = OutboxStatus.DEAD.value
+                            claimed.next_attempt_at = None
+                            logger.error(f"OutboxEvent {event_id} reached max_attempts={max_attempts}; marked DEAD: {failure}")
+                        elif base_backoff_seconds > 0:
+                            delay = calculate_backoff_delay(attempts, base_delay_seconds=base_backoff_seconds, max_delay_seconds=60.0, jitter_ratio=jitter_ratio)
+                            claimed.next_attempt_at = fin_now + timedelta(seconds=delay)
+                        else:
+                            claimed.next_attempt_at = None
         if failure is not None:
             logger.warning(f"Publish failed; will retry later: {failure}")
             break
     return published
-
 
 def validate_transfer_event(envelope: dict) -> uuid.UUID:
     """Validate the v1 public event contract, returning its unique event ID."""
