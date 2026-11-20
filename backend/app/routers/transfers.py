@@ -417,7 +417,10 @@ def create_transfer(
                         fee_bps=fx_rate.fee_bps,
                     )
 
-                    fee_account = None
+                    entries: list[EntryInput] = [
+                        EntryInput(source.id, -data.amount_cents),
+                        EntryInput(sys_fx_src_id, data.amount_cents - fee_cents),
+                    ]
                     if fee_cents > 0:
                         fee_account = db.scalar(
                             select(Account).where(
@@ -433,27 +436,19 @@ def create_transfer(
                             )
                             db.add(fee_account)
                             db.flush()
+                        entries.append(EntryInput(fee_account.id, fee_cents))
+                    else:
+                        entries = [
+                            EntryInput(source.id, -data.amount_cents),
+                            EntryInput(sys_fx_src_id, data.amount_cents),
+                        ]
 
                     tx = post_transaction(
                         session=db,
                         idempotency_key=idempotency_key,
                         idempotency_scope=tx_scope,
                         request_hash=tx_hash,
-                        entries=(
-                            [
-                                EntryInput(source.id, -data.amount_cents),
-                                EntryInput(sys_fx_src_id, data.amount_cents - fee_cents),
-                                EntryInput(
-                                    fee_account.id,
-                                    fee_cents,
-                                ),
-                            ]
-                            if fee_cents > 0
-                            else [
-                                EntryInput(source.id, -data.amount_cents),
-                                EntryInput(sys_fx_src_id, data.amount_cents),
-                            ]
-                        ),
+                        entries=entries,
                         description=data.description,
                         before_commit=lambda session, tx: enqueue_transfer_posted(
                             session=session,
