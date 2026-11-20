@@ -417,6 +417,23 @@ def create_transfer(
                         fee_bps=fx_rate.fee_bps,
                     )
 
+                    fee_account = None
+                    if fee_cents > 0:
+                        fee_account = db.scalar(
+                            select(Account).where(
+                                Account.name == "SYSTEM_FX_FEE_REVENUE",
+                                Account.currency == source.currency,
+                            )
+                        )
+                        if fee_account is None:
+                            fee_account = Account(
+                                name="SYSTEM_FX_FEE_REVENUE",
+                                account_type=AccountType.SYSTEM,
+                                currency=source.currency,
+                            )
+                            db.add(fee_account)
+                            db.flush()
+
                     tx = post_transaction(
                         session=db,
                         idempotency_key=idempotency_key,
@@ -427,10 +444,7 @@ def create_transfer(
                                 EntryInput(source.id, -data.amount_cents),
                                 EntryInput(sys_fx_src_id, data.amount_cents - fee_cents),
                                 EntryInput(
-                                    (
-                                        db.scalar(select(Account).where(Account.name == "SYSTEM_FX_FEE_REVENUE", Account.currency == source.currency))
-                                        or (lambda a: (db.add(a), db.flush(), a)[2])(Account(name="SYSTEM_FX_FEE_REVENUE", account_type=AccountType.SYSTEM, currency=source.currency))
-                                    ).id,
+                                    fee_account.id,
                                     fee_cents,
                                 ),
                             ]
