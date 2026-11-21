@@ -27,7 +27,7 @@ from app.schemas.transfer import TransferCreate, TransferResponse
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, Role, has_permission
 from app.services.audit import get_client_ip, get_request_id, record_audit_event
-from app.services.fx import ExchangeRateNotFound, calculate_fx_conversion, get_latest_rate
+from app.services.fx import ExchangeRateNotFound, StaleExchangeRateError, calculate_fx_conversion, get_latest_rate
 from app.services.ledger import (
     AccountNotFound,
     EntryInput,
@@ -290,7 +290,7 @@ def create_transfer(
                 if is_fx:
                     try:
                         fx_rate = get_latest_rate(db, src_peek.currency, dst_peek.currency)
-                    except ExchangeRateNotFound as exc:
+                    except (ExchangeRateNotFound, StaleExchangeRateError) as exc:
                         raise HTTPException(status_code=400, detail=str(exc)) from exc
                     fx_src_acct = db.scalar(
                         select(Account).where(Account.name == "SYSTEM_FX", Account.currency == src_peek.currency)

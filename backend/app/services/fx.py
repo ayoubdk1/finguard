@@ -1,3 +1,5 @@
+import os
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from sqlalchemy import select
@@ -16,10 +18,15 @@ class ExchangeRateNotFound(FXError):
     pass
 
 
+class StaleExchangeRateError(FXError):
+    pass
+
+
 def get_latest_rate(
     session: Session,
     base_currency: str,
     target_currency: str,
+    max_age_seconds: int | None = None,
 ) -> ExchangeRate:
     if base_currency == target_currency:
         raise FXError("Source and target currencies are identical")
@@ -36,6 +43,12 @@ def get_latest_rate(
         raise ExchangeRateNotFound(
             f"No exchange rate found for {base_currency} -> {target_currency}"
         )
+    default_limit = "300" if os.getenv("FINGUARD_ENV", "development").lower() == "production" else "0"
+    limit = max_age_seconds if max_age_seconds is not None else int(os.getenv("FINGUARD_FX_MAX_AGE_SECONDS", default_limit))
+    if limit > 0 and rate.created_at is not None:
+        created = rate.created_at if rate.created_at.tzinfo else rate.created_at.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - created).total_seconds() > limit:
+            raise StaleExchangeRateError(f"Exchange rate for {base_currency} -> {target_currency} is stale")
     return rate
 
 
