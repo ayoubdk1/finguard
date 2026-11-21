@@ -1,10 +1,11 @@
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
 from app.db.models import LoginHistory, MfaTokenState, User
@@ -70,6 +71,25 @@ logger = logging.getLogger("finguard.security")
 router = APIRouter()
 MFA_LOCKOUT_MINUTES = 15
 MFA_MAX_FAILED = 5
+REFRESH_COOKIE_NAME = "finguard_refresh_token"
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    is_prod = os.getenv("FINGUARD_ENV", "development").lower() == "production"
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        samesite="strict",
+        secure=is_prod,
+        max_age=7 * 24 * 3600,
+        path="/",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    is_prod = os.getenv("FINGUARD_ENV", "development").lower() == "production"
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, httponly=True, samesite="strict", secure=is_prod, path="/")
 
 
 @router.post("/auth/register", response_model=RegisterResponse, status_code=status.HTTP_403_FORBIDDEN)
@@ -78,7 +98,7 @@ def register_user(payload: RegisterRequest):
 
 
 @router.post("/auth/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-def login_user(request: Request, payload: LoginRequest):
+def login_user(request: Request, response: Response, payload: LoginRequest):
     check_login_rate_limit(request, email=payload.email)
     client_ip = extract_client_ip(request)
     user_agent = request.headers.get("user-agent")
@@ -100,23 +120,28 @@ def login_user(request: Request, payload: LoginRequest):
         refresh_token, _ = issue_refresh_token(session, user.id, user_agent=user_agent, ip_address=client_ip)
         session.add(LoginHistory(user_id=user.id, email=user.email, ip_address=client_ip[:45] if client_ip else None, user_agent=user_agent[:255] if user_agent else None, success=True))
         session.commit()
+        _set_refresh_cookie(response, refresh_token)
         return TokenResponse(access_token=token, refresh_token=refresh_token)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-def refresh_access_token(request: Request, payload: RefreshRequest):
+def refresh_access_token(request: Request, response: Response, payload: RefreshRequest | None = Body(default=None)):
+    raw_token = (payload.refresh_token if payload and payload.refresh_token else None) or request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token", headers={"WWW-Authenticate": "Bearer"})
     with SessionLocal() as session:
-        family_id = get_refresh_token_family_id(session, payload.refresh_token)
-        check_refresh_rate_limit(str(family_id) if family_id else hashlib.sha256(payload.refresh_token.encode()).hexdigest()[:16])
+        family_id = get_refresh_token_family_id(session, raw_token)
+        check_refresh_rate_limit(str(family_id) if family_id else hashlib.sha256(raw_token.encode()).hexdigest()[:16])
         try:
-            user_id, new_refresh = rotate_refresh_token(session, payload.refresh_token, user_agent=request.headers.get("user-agent"), ip_address=extract_client_ip(request))
+            user_id, new_refresh = rotate_refresh_token(session, raw_token, user_agent=request.headers.get("user-agent"), ip_address=extract_client_ip(request))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
+        _set_refresh_cookie(response, new_refresh)
         return TokenResponse(access_token=create_access_token(user_id), refresh_token=new_refresh)
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout_user(request: Request, payload: LogoutRequest):
+def logout_user(request: Request, response: Response, payload: LogoutRequest | None = Body(default=None)):
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         try:
@@ -124,9 +149,13 @@ def logout_user(request: Request, payload: LogoutRequest):
             revoke_access_token(str(claims["jti"]), float(claims["exp"]))
         except ValueError:
             pass
-    with SessionLocal() as session:
-        revoke_refresh_token(session, payload.refresh_token)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    raw_token = (payload.refresh_token if payload and payload.refresh_token else None) or request.cookies.get(REFRESH_COOKIE_NAME)
+    if raw_token:
+        with SessionLocal() as session:
+            revoke_refresh_token(session, raw_token)
+    _clear_refresh_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/auth/mfa/setup", response_model=MfaSetupResponse, status_code=status.HTTP_200_OK)
@@ -202,7 +231,7 @@ def mfa_regenerate_backup_codes(current_user: User = Depends(get_current_user), 
 
 
 @router.post("/auth/mfa/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-def mfa_login(request: Request, payload: MfaLoginRequest):
+def mfa_login(request: Request, response: Response, payload: MfaLoginRequest):
     try:
         user_id, jti = verify_mfa_token_with_jti(payload.mfa_token)
     except ValueError as exc:
@@ -251,6 +280,7 @@ def mfa_login(request: Request, payload: MfaLoginRequest):
         token = create_access_token(user.id)
         refresh_token, _ = issue_refresh_token(session, user.id, user_agent=request.headers.get("user-agent"), ip_address=extract_client_ip(request))
         session.commit()
+        _set_refresh_cookie(response, refresh_token)
         return TokenResponse(access_token=token, refresh_token=refresh_token)
 
 

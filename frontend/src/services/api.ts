@@ -2,27 +2,23 @@
 
 const API_BASE_URL = '/api'
 
-const ACCESS_TOKEN_KEY = 'finguard_access_token'
-const REFRESH_TOKEN_KEY = 'finguard_refresh_token'
+let inMemoryAccessToken: string | null = null
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_TOKEN_KEY)
+  return inMemoryAccessToken
 }
 
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
+  return null
 }
 
-export function setTokens(accessToken: string, refreshToken?: string): void {
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  if (refreshToken) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
-  }
+export function setTokens(accessToken: string, _refreshToken?: string): void {
+  void _refreshToken
+  inMemoryAccessToken = accessToken
 }
 
 export function clearTokens(): void {
-  localStorage.removeItem(ACCESS_TOKEN_KEY)
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  inMemoryAccessToken = null
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -31,17 +27,12 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 async function refreshAccessToken(): Promise<string | null> {
-  const refreshToken = getRefreshToken()
-  if (!refreshToken) {
-    clearTokens()
-    return null
-  }
-
   try {
     const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: '{}',
     })
 
     if (!response.ok) {
@@ -67,16 +58,16 @@ async function fetchWithAuth(
     ...(options.headers || {}),
   }
 
-  let response = await fetch(url, { ...options, headers })
+  let response = await fetch(url, { ...options, credentials: 'include', headers })
 
-  if (response.status === 401 && getRefreshToken()) {
+  if (response.status === 401 && !url.includes('/auth/refresh')) {
     const newToken = await refreshAccessToken()
     if (newToken) {
       const retryHeaders = {
         ...(options.headers || {}),
         Authorization: `Bearer ${newToken}`,
       }
-      response = await fetch(url, { ...options, headers: retryHeaders })
+      response = await fetch(url, { ...options, credentials: 'include', headers: retryHeaders })
     }
   }
 
@@ -355,6 +346,7 @@ export async function loginUser(
 ): Promise<AuthTokenResponse> {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   })

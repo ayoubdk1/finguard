@@ -100,14 +100,14 @@ class RefreshRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    refresh_token: str = Field(min_length=16, max_length=256)
+    refresh_token: str | None = Field(default=None, min_length=16, max_length=256)
 
 
 class LogoutRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    refresh_token: str = Field(min_length=16, max_length=256)
+    refresh_token: str | None = Field(default=None, min_length=16, max_length=256)
 # ============================================
 # ACTIVE SESSIONS
 # ============================================

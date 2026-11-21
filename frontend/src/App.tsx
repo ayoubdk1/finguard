@@ -285,16 +285,13 @@ function App() {
 
   useEffect(() => {
     async function checkAuth() {
-      if (
-        typeof window !== 'undefined' &&
-        window.localStorage?.getItem('finguard_access_token')
-      ) {
-        try {
+      try {
+        if (typeof getCurrentUser === 'function') {
           const user = await getCurrentUser()
           setCurrentUser(user)
-        } catch {
-          setCurrentUser(null)
         }
+      } catch {
+        setCurrentUser(null)
       }
       setAuthLoading(false)
     }
