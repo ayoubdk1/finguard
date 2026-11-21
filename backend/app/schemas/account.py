@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 SupportedCurrency = Literal["TND", "USD", "EUR"]
+AccountStatusLiteral = Literal["ACTIVE", "FROZEN", "CLOSED"]
 
 
 class AccountCreate(BaseModel):
@@ -19,6 +20,11 @@ class AccountResponse(BaseModel):
     name: str
     account_type: str
     currency: str
+    status: str = "ACTIVE"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AccountStatusUpdate(BaseModel):
+    status: AccountStatusLiteral
