@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -14,12 +14,13 @@ from app.db.models import (
     User,
 )
 from app.db.session import SessionLocal
-from app.schemas.account import AccountCreate, AccountResponse
+from app.schemas.account import AccountCreate, AccountResponse, AccountStatusUpdate
 from app.schemas.balance import BalanceResponse
 from app.schemas.history import TransactionHistoryItem, TransactionHistoryResponse
 from app.schemas.user import UserCreate, UserResponse
 from app.security.dependencies import ensure_user_owns_account_id, get_current_user
 from app.security.permissions import Permission, has_permission
+from app.services.audit import get_client_ip, get_request_id, record_audit_event
 from app.services.ledger import (
     get_balance,
 )
@@ -284,3 +285,42 @@ def account_statement(
             "derived_balance_check": (opening_balance + period_sum) == running,
             "entries": entries,
         }
+
+
+@router.patch("/accounts/{account_id}/status", response_model=AccountResponse)
+def update_account_status(
+    account_id: UUID,
+    payload: AccountStatusUpdate,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    if not (
+        has_permission(current_user.role, Permission.USER_MANAGE)
+        or has_permission(current_user.role, Permission.FRAUD_ALERT_RESOLVE)
+    ):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        if account is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account.account_type != AccountType.CUSTOMER:
+            raise HTTPException(status_code=400, detail="Cannot change status of system accounts")
+        if account.status == "CLOSED" and payload.status != "CLOSED":
+            raise HTTPException(status_code=409, detail="Closed accounts cannot be reopened")
+        if payload.status == "CLOSED" and get_balance(db, account.id) != 0:
+            raise HTTPException(status_code=409, detail="Cannot close account with non-zero balance")
+
+        account.status = payload.status
+        record_audit_event(
+            db,
+            action=f"ACCOUNT_STATUS_{payload.status}",
+            resource_type="ACCOUNT",
+            resource_id=account.id,
+            actor_id=current_user.id,
+            ip_address=get_client_ip(request),
+            request_id=get_request_id(request),
+        )
+        db.commit()
+        db.refresh(account)
+        return account

@@ -28,6 +28,13 @@ class AccountType(str, enum.Enum):
     SYSTEM = "SYSTEM"
 
 
+class AccountStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    FROZEN = "FROZEN"
+    CLOSED = "CLOSED"
+
+
+
 class TransactionStatus(str, enum.Enum):
     PENDING = "PENDING"
     POSTED = "POSTED"
@@ -83,6 +90,7 @@ class Account(Base):
     name: Mapped[str] = mapped_column(String(100))
     account_type: Mapped[AccountType] = mapped_column(Enum(AccountType, name="account_type"))
     currency: Mapped[str] = mapped_column(String(3))  # ISO 4217, e.g. USD
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ACTIVE", default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User | None"] = relationship(back_populates="accounts")
@@ -94,6 +102,7 @@ class Account(Base):
     __table_args__ = (
         UniqueConstraint("id", "currency", name="uq_accounts_id_currency"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_accounts_currency_format"),
+        CheckConstraint("status IN ('ACTIVE', 'FROZEN', 'CLOSED')", name="ck_accounts_status"),
     )
 
 class Transaction(Base):

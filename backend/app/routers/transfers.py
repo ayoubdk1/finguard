@@ -84,6 +84,10 @@ def create_deposit(
                 status_code=404,
                 detail="Customer account not found",
             )
+        if getattr(account, "status", "ACTIVE") != "ACTIVE":
+            raise HTTPException(status_code=403, detail=f"Account is {account.status.lower()} and cannot accept deposits")
+        if getattr(account, "status", "ACTIVE") != "ACTIVE":
+            raise HTTPException(status_code=403, detail=f"Account is {account.status.lower()} and cannot accept deposits")
 
         # 2. Find SYSTEM_FUNDING for the customer's currency
         funding = db.scalar(
@@ -313,6 +317,10 @@ def create_transfer(
 
                 if source.account_type != AccountType.CUSTOMER or destination.account_type != AccountType.CUSTOMER:
                     raise HTTPException(status_code=400, detail="Transfers require customer accounts")
+                if getattr(source, "status", "ACTIVE") != "ACTIVE" or getattr(destination, "status", "ACTIVE") != "ACTIVE":
+                    raise HTTPException(status_code=403, detail="Source or destination account is not active")
+                if getattr(source, "status", "ACTIVE") != "ACTIVE" or getattr(destination, "status", "ACTIVE") != "ACTIVE":
+                    raise HTTPException(status_code=403, detail="Source or destination account is not active")
 
                 try:
                     check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
@@ -633,6 +641,16 @@ def refund_transfer(
             fx_e = sorted(fx_leg_peek.entries, key=lambda e: e.amount)
             if len(fx_e) == 2:
                 recipient_acct_id = fx_e[1].account_id
+
+        src_acct_rf = db.get(Account, orig_source_id)
+        dst_acct_rf = db.get(Account, recipient_acct_id)
+        if (src_acct_rf and getattr(src_acct_rf, "status", "ACTIVE") != "ACTIVE") or (dst_acct_rf and getattr(dst_acct_rf, "status", "ACTIVE") != "ACTIVE"):
+            raise HTTPException(status_code=403, detail="Cannot refund when an account is not active")
+
+        src_acct_rf = db.get(Account, orig_source_id)
+        dst_acct_rf = db.get(Account, recipient_acct_id)
+        if (src_acct_rf and getattr(src_acct_rf, "status", "ACTIVE") != "ACTIVE") or (dst_acct_rf and getattr(dst_acct_rf, "status", "ACTIVE") != "ACTIVE"):
+            raise HTTPException(status_code=403, detail="Cannot refund when an account is not active")
 
         if current_user.role != Role.ADMIN:
             recipient_acct = db.get(Account, recipient_acct_id)
