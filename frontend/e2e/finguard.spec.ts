@@ -1,13 +1,18 @@
 import { expect, test, type Page } from '@playwright/test'
 
 async function mockApi(page: Page) {
+  let loggedIn = false
   await page.route(/http:\/\/(127\.0\.0\.1|localhost):8000\/|\/api\//, async (route) => {
     const url = route.request().url()
     if (url.includes('/auth/login')) {
+      loggedIn = true
       return route.fulfill({ json: { access_token: 'tok', refresh_token: 'ref', token_type: 'bearer' } })
     }
+    if (url.includes('/auth/refresh')) {
+      return loggedIn ? route.fulfill({ json: { access_token: 'tok2', refresh_token: 'ref2', token_type: 'bearer' } }) : route.fulfill({ status: 401, json: { detail: 'Missing refresh token' } })
+    }
     if (url.includes('/auth/me')) {
-      return route.fulfill({ json: { id: 'u1', email: 'admin@finguard.com', full_name: 'FinGuard Admin', role: 'ADMIN', status: 'ACTIVE', mfa_enabled: false } })
+      return loggedIn ? route.fulfill({ json: { id: 'u1', email: 'admin@finguard.com', full_name: 'FinGuard Admin', role: 'ADMIN', status: 'ACTIVE', mfa_enabled: false } }) : route.fulfill({ status: 401, json: { detail: 'Unauthorized' } })
     }
     if (url.endsWith('/accounts')) {
       return route.fulfill({ json: [{ id: 'acc-1', user_id: 'u1', name: 'Main', account_type: 'CUSTOMER', currency: 'EUR', created_at: '2026-01-01T00:00:00Z' }, { id: 'acc-2', user_id: 'u1', name: 'Savings', account_type: 'CUSTOMER', currency: 'EUR', created_at: '2026-01-01T00:00:00Z' }] })
