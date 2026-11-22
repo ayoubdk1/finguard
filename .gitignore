@@ -5,3 +5,9 @@ __pycache__/
 .pytest_cache/
 # AI Agent Skills
 .agents/
+
+# Test/coverage artifacts
+.coverage
+backend/coverage.xml
+frontend/test-results/
+frontend/playwright-report/
