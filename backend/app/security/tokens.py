@@ -34,12 +34,13 @@ def get_jwt_secret() -> str:
     return secret
 
 
-def create_access_token(user_id: UUID) -> str:
+def create_access_token(user_id: UUID, auth_time: int | None = None) -> str:
     now = datetime.now(timezone.utc)
 
     payload = {
         "sub": str(user_id),
         "iat": now,
+        "auth_time": auth_time if auth_time is not None else int(now.timestamp()),
         "exp": now + timedelta(
             minutes=ACCESS_TOKEN_EXPIRE_MINUTES
         ),
@@ -118,7 +119,10 @@ def rotate_refresh_token(
     now = datetime.now(timezone.utc)
     token_hash = hash_refresh_token(raw_token)
     db_token = session.scalar(
-        select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == token_hash)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if db_token is None:
         raise ValueError("Invalid refresh token")

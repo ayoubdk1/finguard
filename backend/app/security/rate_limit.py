@@ -115,9 +115,19 @@ def check_rate_limit(bucket: str, key: str, max_attempts: int, window_seconds: f
     _check_in_memory(bucket_key, max_attempts, window_seconds, detail)
 
 
+def _email_bucket_key(email: str) -> str:
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:32]
+
+
 def check_login_rate_limit(request: Request, email: str | None = None) -> None:
     ip = extract_client_ip(request)
     check_rate_limit("login:ip", ip, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts. Please try again later.")
+
+
+def record_failed_login_and_check_spray(email: str) -> None:
+    if not email or not email.strip():
+        return
+    check_rate_limit("login:acct_fail", _email_bucket_key(email), LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many failed login attempts for this account. Please try again later.")
     if email:
         acct_key = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:24]
         check_rate_limit("login:acct", acct_key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts for this account.")

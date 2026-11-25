@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   confirmPasswordReset,
+  loginMfa,
   loginUser,
   requestPasswordReset,
 } from './services/api'
@@ -9,7 +10,7 @@ interface LoginFormProps {
   onSuccess: () => void
 }
 
-type AuthMode = 'login' | 'forgot' | 'reset'
+type AuthMode = 'login' | 'mfa' | 'forgot' | 'reset'
 
 export function LoginForm({ onSuccess }: LoginFormProps) {
   const [mode, setMode] = useState<AuthMode>('login')
@@ -17,6 +18,8 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   const [password, setPassword] = useState('')
   const [resetToken, setResetToken] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [mfaToken, setMfaToken] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [infoMessage, setInfoMessage] = useState<string | null>(null)
@@ -25,6 +28,10 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
     setMode(nextMode)
     setError(null)
     setInfoMessage(null)
+    if (nextMode === 'login') {
+      setMfaToken('')
+      setMfaCode('')
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -35,7 +42,16 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
 
     try {
       if (mode === 'login') {
-        await loginUser(email, password)
+        const res = await loginUser(email, password)
+        if (res.mfa_required && res.mfa_token) {
+          setMfaToken(res.mfa_token)
+          setMfaCode('')
+          setMode('mfa')
+        } else {
+          onSuccess()
+        }
+      } else if (mode === 'mfa') {
+        await loginMfa(mfaToken, mfaCode.trim())
         onSuccess()
       } else if (mode === 'forgot') {
         const res = await requestPasswordReset(email)
@@ -66,12 +82,15 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   const getTitle = () => {
+    if (mode === 'mfa') return 'Vérification à deux facteurs'
     if (mode === 'forgot') return 'Mot de passe oublié'
     if (mode === 'reset') return 'Réinitialiser le mot de passe'
     return 'Connexion FinGuard'
   }
 
   const getSubtitle = () => {
+    if (mode === 'mfa')
+      return "Entrez le code ? 6 chiffres de votre application d'authentification ou un code de secours"
     if (mode === 'forgot')
       return 'Entrez votre adresse email pour recevoir un jeton de réinitialisation'
     if (mode === 'reset')
@@ -174,6 +193,22 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••••••"
+                className="auth-input"
+              />
+            </div>
+          )}
+
+          {mode === 'mfa' && (
+            <div className="auth-field">
+              <label htmlFor="auth-mfa-code">Code MFA ou code de secours</label>
+              <input
+                id="auth-mfa-code"
+                type="text"
+                required
+                autoComplete="one-time-code"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                placeholder="123456"
                 className="auth-input"
               />
             </div>

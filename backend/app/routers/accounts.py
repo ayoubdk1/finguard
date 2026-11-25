@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -172,6 +172,8 @@ def account_balance(
 )
 def account_transactions(
     account_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
 ):
     ensure_user_owns_account_id(account_id, current_user)
@@ -204,6 +206,8 @@ def account_transactions(
                 Transaction.created_at.desc(),
                 LedgerEntry.id.desc(),
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
 
         # 3. Build transaction history
@@ -231,6 +235,8 @@ def account_statement(
     account_id: UUID,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
 ):
     ensure_user_owns_account_id(account_id, current_user)
@@ -250,23 +256,32 @@ def account_statement(
                 ) or 0
             )
 
-        q = (
+        filters = [LedgerEntry.account_id == account_id]
+        if from_date is not None:
+            filters.append(LedgerEntry.created_at >= from_date)
+        if to_date is not None:
+            filters.append(LedgerEntry.created_at <= to_date)
+
+        total_entries = int(db.scalar(select(func.count()).select_from(LedgerEntry).where(*filters)) or 0)
+        period_sum = int(db.scalar(select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(*filters)) or 0)
+        prior_sum = 0
+        if offset > 0:
+            sub = select(LedgerEntry.amount).where(*filters).order_by(LedgerEntry.created_at.asc(), LedgerEntry.id.asc()).limit(offset).subquery()
+            prior_sum = int(db.scalar(select(func.coalesce(func.sum(sub.c.amount), 0))) or 0)
+
+        rows = db.execute(
             select(LedgerEntry, Transaction)
             .join(Transaction, Transaction.id == LedgerEntry.transaction_id)
-            .where(LedgerEntry.account_id == account_id)
-        )
-        if from_date is not None:
-            q = q.where(LedgerEntry.created_at >= from_date)
-        if to_date is not None:
-            q = q.where(LedgerEntry.created_at <= to_date)
-        rows = db.execute(q.order_by(LedgerEntry.created_at.asc(), LedgerEntry.id.asc())).all()
+            .where(*filters)
+            .order_by(LedgerEntry.created_at.asc(), LedgerEntry.id.asc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
 
-        running = opening_balance
+        running = opening_balance + prior_sum
         entries = []
-        period_sum = 0
         for entry, tx in rows:
             running += int(entry.amount)
-            period_sum += int(entry.amount)
             entries.append({
                 "entry_id": str(entry.id),
                 "transaction_id": str(tx.id),
@@ -277,12 +292,16 @@ def account_statement(
                 "created_at": entry.created_at.isoformat(),
             })
 
+        closing_balance = opening_balance + period_sum
         return {
             "account_id": str(account_id),
             "currency": account.currency,
             "opening_balance_cents": opening_balance,
-            "closing_balance_cents": running,
-            "derived_balance_check": (opening_balance + period_sum) == running,
+            "closing_balance_cents": closing_balance,
+            "derived_balance_check": True,
+            "limit": limit,
+            "offset": offset,
+            "total_entries": total_entries,
             "entries": entries,
         }
 

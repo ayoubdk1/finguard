@@ -22,7 +22,7 @@ from app.schemas.auth import (
     SessionListResponse,
 )
 from app.security.dependencies import get_current_user
-from app.security.passwords import hash_password
+from app.security.passwords import hash_password, validate_password_policy
 from app.security.permissions import Permission, has_permission
 from app.security.tokens import (
     get_active_sessions_for_user,
@@ -32,6 +32,7 @@ from app.security.tokens import (
 from app.services.audit import get_client_ip, get_request_id, record_audit_event
 
 logger = logging.getLogger("finguard.security")
+ALLOWED_ROLES = {"CUSTOMER", "FRAUD_ANALYST", "AUDITOR", "ADMIN"}
 
 router = APIRouter()
 
@@ -60,10 +61,17 @@ def admin_list_users(current_user: User = Depends(get_current_user)):
 )
 def admin_create_user(
     payload: AdminCreateUserRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     if not has_permission(current_user.role, Permission.USER_MANAGE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if payload.role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid role")
+    try:
+        validate_password_policy(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     with SessionLocal() as session:
         existing = session.scalar(
@@ -83,6 +91,17 @@ def admin_create_user(
             status=payload.status,
         )
         session.add(user)
+        session.flush()
+        record_audit_event(
+            session,
+            action="USER_CREATED",
+            resource_type="USER",
+            resource_id=user.id,
+            actor_id=current_user.id,
+            ip_address=get_client_ip(request),
+            request_id=get_request_id(request),
+            details={"role": user.role, "status": user.status},
+        )
         session.commit()
         session.refresh(user)
         return user
@@ -107,6 +126,10 @@ def admin_update_user(
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
 
+        if payload.role is not None and payload.role not in ALLOWED_ROLES:
+            raise HTTPException(status_code=422, detail="Invalid role")
+        if payload.role == "ADMIN" and user.role != "ADMIN":
+            raise HTTPException(status_code=409, detail="Promoting a user to ADMIN requires four-eyes approval via /admin/approvals/role-change")
         demoting = payload.role is not None and payload.role != "ADMIN"
         disabling = payload.status is not None and payload.status != "ACTIVE"
         if user.id == current_user.id and (demoting or disabling):
@@ -146,6 +169,10 @@ def admin_reset_user_password(
 ):
     if not has_permission(current_user.role, Permission.USER_MANAGE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    try:
+        validate_password_policy(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     with SessionLocal() as session:
         user = session.get(User, user_id)
@@ -214,6 +241,7 @@ def admin_list_user_sessions(
 def admin_revoke_user_session(
     user_id: UUID,
     session_id: UUID,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     if not has_permission(current_user.role, Permission.USER_MANAGE):
@@ -223,6 +251,17 @@ def admin_revoke_user_session(
         revoked = revoke_session_by_id(session, session_id, user_id)
         if not revoked:
             raise HTTPException(status_code=404, detail="Session not found")
+        record_audit_event(
+            session,
+            action="ADMIN_SESSION_REVOKED",
+            resource_type="USER",
+            resource_id=user_id,
+            actor_id=current_user.id,
+            ip_address=get_client_ip(request),
+            request_id=get_request_id(request),
+            details={"session_id": str(session_id)},
+        )
+        session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -248,10 +287,37 @@ def admin_list_audit_logs(limit: int = 100, current_user: User = Depends(get_cur
         ]
 
 
+@router.get("/admin/approvals", status_code=status.HTTP_200_OK)
+def list_approval_requests(status_filter: str | None = None, current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    with SessionLocal() as session:
+        q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
+        if status_filter:
+            q = q.where(ApprovalRequest.status == status_filter.upper())
+        rows = session.scalars(q.limit(100)).all()
+        return [
+            {
+                "id": str(r.id),
+                "action_type": r.action_type,
+                "target_id": str(r.target_id),
+                "payload": r.payload,
+                "status": r.status,
+                "requested_by": str(r.requested_by),
+                "approved_by": str(r.approved_by) if r.approved_by else None,
+                "created_at": r.created_at.isoformat(),
+                "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+            }
+            for r in rows
+        ]
+
+
 @router.post("/admin/approvals/role-change", status_code=status.HTTP_201_CREATED)
 def request_role_change_approval(user_id: UUID, new_role: str, request: Request, current_user: User = Depends(get_current_user)):
     if not has_permission(current_user.role, Permission.USER_MANAGE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if new_role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid role")
     with SessionLocal() as session:
         if session.get(User, user_id) is None:
             raise HTTPException(status_code=404, detail="User not found")
@@ -268,21 +334,48 @@ def approve_pending_request(approval_id: UUID, request: Request, current_user: U
     if not has_permission(current_user.role, Permission.USER_MANAGE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     with SessionLocal() as session:
-        req = session.get(ApprovalRequest, approval_id)
+        req = session.scalar(select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update())
         if req is None:
             raise HTTPException(status_code=404, detail="Approval request not found")
         if req.status != "PENDING":
             raise HTTPException(status_code=409, detail="Approval request already resolved")
         if req.requested_by == current_user.id:
             raise HTTPException(status_code=409, detail="Four-eyes violation: requester cannot approve")
+        if req.target_id == current_user.id:
+            raise HTTPException(status_code=409, detail="Four-eyes violation: target user cannot approve")
         if req.action_type == "ROLE_CHANGE":
-            target = session.get(User, req.target_id)
+            target = session.scalar(select(User).where(User.id == req.target_id).with_for_update())
             if target is None:
                 raise HTTPException(status_code=404, detail="Target user not found")
-            target.role = str(req.payload["role"])
+            next_role = str(req.payload["role"])
+            if next_role not in ALLOWED_ROLES:
+                raise HTTPException(status_code=422, detail="Invalid role in approval payload")
+            if target.role == "ADMIN" and target.status == "ACTIVE" and next_role != "ADMIN":
+                active_admins = int(session.scalar(select(func.count()).select_from(User).where(User.role == "ADMIN", User.status == "ACTIVE")) or 0)
+                if active_admins <= 1:
+                    raise HTTPException(status_code=409, detail="Cannot demote the last active admin")
+            target.role = next_role
             record_audit_event(session, action="ROLE_CHANGE_APPROVED", resource_type="USER", resource_id=target.id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"approval_id": str(req.id), "role": target.role})
         req.status = "APPROVED"
         req.approved_by = current_user.id
         req.resolved_at = datetime.now(timezone.utc)
         session.commit()
         return {"id": str(req.id), "status": req.status, "approved_by": str(req.approved_by)}
+
+
+@router.post("/admin/approvals/{approval_id}/reject", status_code=status.HTTP_200_OK)
+def reject_pending_request(approval_id: UUID, request: Request, current_user: User = Depends(get_current_user)):
+    if not has_permission(current_user.role, Permission.USER_MANAGE):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    with SessionLocal() as session:
+        req = session.scalar(select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update())
+        if req is None:
+            raise HTTPException(status_code=404, detail="Approval request not found")
+        if req.status != "PENDING":
+            raise HTTPException(status_code=409, detail="Approval request already resolved")
+        req.status = "REJECTED"
+        req.approved_by = current_user.id
+        req.resolved_at = datetime.now(timezone.utc)
+        record_audit_event(session, action="ROLE_CHANGE_REJECTED", resource_type="USER", resource_id=req.target_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"approval_id": str(req.id)})
+        session.commit()
+        return {"id": str(req.id), "status": req.status, "rejected_by": str(req.approved_by)}

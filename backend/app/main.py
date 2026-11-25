@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import secrets
 import socket
 import time
 import uuid
@@ -89,6 +90,8 @@ async def observability_and_security_middleware(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = (
         "max-age=63072000; includeSubDomains; preload"
     )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     if request.url.path in ("/docs", "/redoc"):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -125,8 +128,33 @@ def health():
     return {"status": "ok"}
 
 
+def _require_ops_auth(request: Request) -> None:
+    metrics_token = os.getenv("FINGUARD_METRICS_TOKEN", "").strip()
+    is_prod = os.getenv("FINGUARD_ENV", "development").lower() == "production"
+    if not is_prod and not metrics_token:
+        return
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    bearer = auth.split(" ", 1)[1].strip()
+    if metrics_token and secrets.compare_digest(bearer, metrics_token):
+        return
+    try:
+        from app.db.models import User
+        from app.security.tokens import verify_access_token
+        uid = verify_access_token(bearer)
+        with SessionLocal() as db:
+            user = db.get(User, uid)
+            if user is not None and user.role in ("ADMIN", "AUDITOR") and getattr(user, "status", "ACTIVE") == "ACTIVE":
+                return
+    except Exception:
+        logger.debug("Ops auth JWT verification failed", exc_info=True)
+    raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
 @app.get("/health/ready")
-def readiness_check():
+def readiness_check(request: Request):
+    _require_ops_auth(request)
     checks: dict[str, str] = {}
     is_ready = True
 
@@ -187,41 +215,7 @@ def readiness_check():
     else:
         checks["kafka"] = "disabled"
 
-    try:
-        from alembic.config import Config
-        from alembic.runtime.migration import MigrationContext
-        from alembic.script import ScriptDirectory
-
-        ini_path = Path(__file__).resolve().parents[1] / "alembic.ini"
-        cfg = Config(str(ini_path))
-        cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-        head_rev = ScriptDirectory.from_config(cfg).get_current_head()
-        with engine.connect() as conn:
-            current_rev = MigrationContext.configure(conn).get_current_revision()
-        if current_rev == head_rev:
-            checks["migrations"] = "ok"
-        else:
-            checks["migrations"] = "out_of_date"
-            is_ready = False
-    except Exception:
-        checks["migrations"] = "error"
-        is_ready = False
-
-    streaming_on = os.getenv("FINGUARD_STREAMING_ENABLED", "0") == "1"
-    kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
-    if streaming_on or kafka_servers:
-        target = kafka_servers.split(",")[0].strip() if kafka_servers else "127.0.0.1:9092"
-        host, _, port_str = target.partition(":")
-        try:
-            with socket.create_connection((host, int(port_str or 9092)), timeout=1.0):
-                checks["kafka"] = "ok"
-        except Exception:
-            checks["kafka"] = "unreachable"
-            if streaming_on:
-                is_ready = False
-    else:
-        checks["kafka"] = "disabled"
-
+    
     if not is_ready:
         raise HTTPException(
             status_code=503,
@@ -231,7 +225,8 @@ def readiness_check():
 
 
 @app.get("/metrics")
-def prometheus_metrics():
+def prometheus_metrics(request: Request):
+    _require_ops_auth(request)
     try:
         from app.db.models import OutboxEvent, OutboxStatus
 

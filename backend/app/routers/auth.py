@@ -7,6 +7,7 @@ from uuid import UUID
 import jwt
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db.models import LoginHistory, MfaTokenState, User
 from app.db.session import SessionLocal
@@ -19,6 +20,7 @@ from app.schemas.auth import (
     MfaBackupCodesResponse,
     MfaDisableRequest,
     MfaLoginRequest,
+    MfaSetupRequest,
     MfaSetupResponse,
     MfaVerifyRequest,
     RefreshRequest,
@@ -47,6 +49,7 @@ from app.security.rate_limit import (
     check_mfa_rate_limit,
     check_refresh_rate_limit,
     extract_client_ip,
+    record_failed_login_and_check_spray,
 )
 from app.security.tokens import (
     create_access_token,
@@ -70,6 +73,7 @@ from app.services.email import get_email_sender
 logger = logging.getLogger("finguard.security")
 router = APIRouter()
 MFA_LOCKOUT_MINUTES = 15
+_DUMMY_PASSWORD_HASH = hash_password("FinGuard-Timing-Dummy-Secret!2026")
 MFA_MAX_FAILED = 5
 REFRESH_COOKIE_NAME = "finguard_refresh_token"
 
@@ -104,9 +108,12 @@ def login_user(request: Request, response: Response, payload: LoginRequest):
     user_agent = request.headers.get("user-agent")
     with SessionLocal() as session:
         user = session.scalar(select(User).where(User.email == payload.email))
-        if user is None or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        candidate_hash = user.password_hash if (user is not None and user.password_hash) else _DUMMY_PASSWORD_HASH
+        password_ok = verify_password(payload.password, candidate_hash)
+        if user is None or not user.password_hash or not password_ok:
             session.add(LoginHistory(user_id=user.id if user else None, email=payload.email, ip_address=client_ip[:45] if client_ip else None, user_agent=user_agent[:255] if user_agent else None, success=False, failure_reason="Invalid credentials"))
             session.commit()
+            record_failed_login_and_check_spray(payload.email)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password", headers={"WWW-Authenticate": "Bearer"})
         if getattr(user, "status", "ACTIVE") != "ACTIVE":
             session.add(LoginHistory(user_id=user.id, email=user.email, ip_address=client_ip[:45] if client_ip else None, user_agent=user_agent[:255] if user_agent else None, success=False, failure_reason=f"Account {user.status.lower()}"))
@@ -132,12 +139,16 @@ def refresh_access_token(request: Request, response: Response, payload: RefreshR
     with SessionLocal() as session:
         family_id = get_refresh_token_family_id(session, raw_token)
         check_refresh_rate_limit(str(family_id) if family_id else hashlib.sha256(raw_token.encode()).hexdigest()[:16])
+        from app.db.models import RefreshToken
+        from app.security.tokens import hash_refresh_token
+        old_tok = session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_token)))
+        orig_auth_time = int((old_tok.created_at.replace(tzinfo=timezone.utc) if old_tok and old_tok.created_at.tzinfo is None else old_tok.created_at).timestamp()) if old_tok and old_tok.created_at else int(datetime.now(timezone.utc).timestamp())
         try:
             user_id, new_refresh = rotate_refresh_token(session, raw_token, user_agent=request.headers.get("user-agent"), ip_address=extract_client_ip(request))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
         _set_refresh_cookie(response, new_refresh)
-        return TokenResponse(access_token=create_access_token(user_id), refresh_token=new_refresh)
+        return TokenResponse(access_token=create_access_token(user_id, auth_time=orig_auth_time), refresh_token=new_refresh)
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -159,11 +170,13 @@ def logout_user(request: Request, response: Response, payload: LogoutRequest | N
 
 
 @router.post("/auth/mfa/setup", response_model=MfaSetupResponse, status_code=status.HTTP_200_OK)
-def mfa_setup(current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
+def mfa_setup(payload: MfaSetupRequest, current_user: User = Depends(get_current_user), _step_up: None = Depends(require_recent_login)):
     with SessionLocal() as session:
         user = session.get(User, current_user.id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
+        if not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid current password")
         if user.mfa_enabled:
             raise HTTPException(status_code=400, detail="MFA is already enabled")
         secret = generate_mfa_secret()
@@ -246,11 +259,14 @@ def mfa_login(request: Request, response: Response, payload: MfaLoginRequest):
             locked_until = user.mfa_locked_until if user.mfa_locked_until.tzinfo else user.mfa_locked_until.replace(tzinfo=timezone.utc)
             if locked_until > now:
                 raise HTTPException(status_code=423, detail="Account MFA is temporarily locked due to failed attempts")
-        tok_state = session.get(MfaTokenState, jti)
+        session.execute(
+            pg_insert(MfaTokenState)
+            .values(jti=jti, user_id=user.id, failed_attempts=0, expires_at=now + timedelta(minutes=5))
+            .on_conflict_do_nothing(index_elements=["jti"])
+        )
+        tok_state = session.scalar(select(MfaTokenState).where(MfaTokenState.jti == jti).with_for_update())
         if tok_state is None:
-            tok_state = MfaTokenState(jti=jti, user_id=user.id, failed_attempts=0, expires_at=now + timedelta(minutes=5))
-            session.add(tok_state)
-            session.flush()
+            raise HTTPException(status_code=401, detail="Invalid MFA token")
         if tok_state.used_at is not None:
             raise HTTPException(status_code=401, detail="MFA token has already been used")
         if tok_state.failed_attempts >= MFA_MAX_FAILED:
