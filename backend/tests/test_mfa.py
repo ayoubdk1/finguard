@@ -35,7 +35,7 @@ def test_mfa_setup_and_enable_flow():
     headers = {"Authorization": f"Bearer {access_token}"}
 
     # 1. Setup MFA
-    setup_resp = client.post("/auth/mfa/setup", headers=headers)
+    setup_resp = client.post("/auth/mfa/setup", headers=headers, json={"current_password": password})
     assert setup_resp.status_code == 200
     setup_data = setup_resp.json()
     secret = setup_data["secret"]

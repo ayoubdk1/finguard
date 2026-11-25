@@ -133,6 +133,13 @@ class SessionListResponse(BaseModel):
 # MULTI-FACTOR AUTHENTICATION (TOTP)
 # ============================================
 
+class MfaSetupRequest(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=128)
+
+
 class MfaSetupResponse(BaseModel):
 
     secret: str
@@ -165,7 +172,7 @@ class MfaLoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mfa_token: str
-    code: str = Field(min_length=6, max_length=16)
+    code: str = Field(min_length=6, max_length=32)
 
 
 # ============================================

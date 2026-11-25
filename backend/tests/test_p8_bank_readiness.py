@@ -65,3 +65,48 @@ def test_simulated_hold_blocks_transfer_pre_commit(client, session, world, monke
     assert att is not None and att.reason == "FRAUD_HOLD"
     alert = session.scalar(select(FraudAlert).where(FraudAlert.account_id == world["alice"].id).order_by(FraudAlert.created_at.desc()))
     assert alert is not None and alert.status == "PENDING"
+
+
+def test_password_spray_with_rotating_xff_blocked(client, session):
+    target_email = f"spray-{uuid.uuid4().hex[:8]}@example.com"
+    pwd = "StrongVictimPassword!123"
+    session.add(User(id=uuid.uuid4(), email=target_email, full_name="Victim", password_hash=hash_password(pwd), role="CUSTOMER", status="ACTIVE"))
+    session.commit()
+
+    statuses = [
+        client.post(
+            "/auth/login",
+            headers={"X-Forwarded-For": f"198.51.100.{i}"},
+            json={"email": target_email, "password": f"WrongPass!{i}"},
+        ).status_code
+        for i in range(1, 11)
+    ]
+    assert statuses.count(429) >= 5
+
+    # Victim's correct password from a clean IP must NOT be locked out
+    victim_resp = client.post(
+        "/auth/login",
+        headers={"X-Forwarded-For": "203.0.113.99"},
+        json={"email": target_email, "password": pwd},
+    )
+    assert victim_resp.status_code == 200
+
+
+def test_scorer_failure_does_not_debit_sender(client, session, world, monkeypatch):
+    assert client.post("/deposits", headers={"Idempotency-Key": f"sd2-{uuid.uuid4()}"}, json={"account_id": str(world["alice"].id), "amount_cents": 20_000}).status_code == 201
+    before_alice = get_balance(session, world["alice"].id)
+    monkeypatch.setattr("app.routers.transfers.assess_transaction_risk", lambda **kw: (_ for _ in ()).throw(RuntimeError("scorer down")))
+    resp = client.post("/transfers", headers={"Idempotency-Key": f"sf2-{uuid.uuid4()}"}, json={"source_account_id": str(world["alice"].id), "destination_account_id": str(world["bob"].id), "amount_cents": 5_000})
+    assert resp.status_code == 503
+    assert get_balance(session, world["alice"].id) == before_alice
+
+
+def test_transactions_and_statement_pagination(client, world):
+    for i in range(4):
+        assert client.post("/deposits", headers={"Idempotency-Key": f"pg-{i}-{uuid.uuid4()}"}, json={"account_id": str(world["alice"].id), "amount_cents": 1_000}).status_code == 201
+    hist = client.get(f"/accounts/{world['alice'].id}/transactions?limit=2&offset=1")
+    assert hist.status_code == 200 and len(hist.json()["transactions"]) == 2
+    stmt = client.get(f"/accounts/{world['alice'].id}/statement?limit=2&offset=1")
+    assert stmt.status_code == 200
+    data = stmt.json()
+    assert len(data["entries"]) == 2 and data["total_entries"] >= 4 and data["closing_balance_cents"] >= 4_000

@@ -32,9 +32,9 @@ def test_mfa_setup_disable_stepup_replay_lockout_and_backup_codes(client, sessio
 
         stale_payload = {"sub": str(user.id), "type": "access", "iat": datetime.now(timezone.utc) - timedelta(minutes=20), "exp": datetime.now(timezone.utc) + timedelta(minutes=10), "iss": JWT_ISSUER, "aud": JWT_AUDIENCE, "jti": str(uuid.uuid4())}
         stale_tok = jwt.encode(stale_payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
-        assert client.post("/auth/mfa/setup", headers={"Authorization": f"Bearer {stale_tok}"}).status_code == 403
+        assert client.post("/auth/mfa/setup", headers={"Authorization": f"Bearer {stale_tok}"}, json={"current_password": pwd}).status_code == 403
 
-        setup = client.post("/auth/mfa/setup", headers=hdrs)
+        setup = client.post("/auth/mfa/setup", headers=hdrs, json={"current_password": pwd})
         assert setup.status_code == 200
         secret = setup.json()["secret"]
         code1 = pyotp.TOTP(secret).now()
@@ -44,7 +44,7 @@ def test_mfa_setup_disable_stepup_replay_lockout_and_backup_codes(client, sessio
         backup_codes = en.json()["backup_codes"]
         assert len(backup_codes) == 10
 
-        assert client.post("/auth/mfa/setup", headers=hdrs).status_code == 400
+        assert client.post("/auth/mfa/setup", headers=hdrs, json={"current_password": pwd}).status_code == 400
 
         mfa_tok1 = _login(client, user.email, pwd).json()["mfa_token"]
         assert client.post("/auth/mfa/login", json={"mfa_token": mfa_tok1, "code": code1}).status_code == 401

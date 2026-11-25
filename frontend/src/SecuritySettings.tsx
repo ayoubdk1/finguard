@@ -23,6 +23,7 @@ interface SecuritySettingsProps {
 }
 
 export default function SecuritySettings({ currentUser, onUserUpdated }: SecuritySettingsProps) {
+  const [setupPwd, setSetupPwd] = useState('')
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [mfaSecret, setMfaSecret] = useState('')
   const [totpCode, setTotpCode] = useState('')
@@ -62,13 +63,14 @@ export default function SecuritySettings({ currentUser, onUserUpdated }: Securit
     })()
   }, [])
 
-  async function handleStartMfa() {
-    setMfaErr(''); setMfaMsg('')
+  async function handleStartMfa(e: FormEvent) {
+    e.preventDefault(); setMfaErr(''); setMfaMsg('')
     try {
-      const data = await setupMfa()
+      const data = await setupMfa(setupPwd)
+      setSetupPwd('')
       setMfaSecret(data.secret)
       setQrDataUrl(await QRCode.toDataURL(data.otpauth_uri))
-    } catch (e) { setMfaErr(e instanceof Error ? e.message : 'MFA setup failed') }
+    } catch (err) { setMfaErr(err instanceof Error ? err.message : 'MFA setup failed') }
   }
 
   async function handleEnableMfa(e: FormEvent) {
@@ -127,7 +129,13 @@ export default function SecuritySettings({ currentUser, onUserUpdated }: Securit
         {!currentUser?.mfa_enabled ? (
           <div>
             {!qrDataUrl ? (
-              <button type="button" className="primary-btn" onClick={handleStartMfa}>Set up MFA</button>
+              <form onSubmit={handleStartMfa} className="form-grid">
+                <div className="field">
+                  <label htmlFor="mfa-setup-pwd">Current password</label>
+                  <input id="mfa-setup-pwd" type="password" value={setupPwd} onChange={(e) => setSetupPwd(e.target.value)} required />
+                </div>
+                <button type="submit" className="primary-btn">Set up MFA</button>
+              </form>
             ) : (
               <form onSubmit={handleEnableMfa} className="form-grid">
                 <img src={qrDataUrl} alt="MFA QR Code" width={180} height={180} />

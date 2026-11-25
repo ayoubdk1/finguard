@@ -8,6 +8,8 @@ import time
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
+from app.security.passwords import hash_password, verify_password
+
 _DEV_FALLBACK_RAW = b"finguard-dev-only-mfa-key-32bytes!"
 
 
@@ -95,16 +97,18 @@ def decrypt_mfa_secret(stored_secret: str) -> str:
 
 
 def generate_backup_codes(count: int = 10) -> list[str]:
-    return [f"{(r := secrets.token_hex(4).upper())[:4]}-{r[4:]}" for _ in range(count)]
+    return [f"{(r := secrets.token_hex(8).upper())[:4]}-{r[4:8]}-{r[8:12]}-{r[12:]}" for _ in range(count)]
 
 
 def hash_backup_code(code: str) -> str:
-    return hashlib.sha256(code.strip().upper().replace("-", "").encode("utf-8")).hexdigest()
+    return hash_password(code.strip().upper().replace("-", ""))
 
 
 def verify_and_consume_backup_code(code: str, hashed_codes: list[str]) -> tuple[bool, list[str]]:
-    cand = hash_backup_code(code)
+    norm = code.strip().upper().replace("-", "")
+    legacy = hashlib.sha256(norm.encode("utf-8")).hexdigest()
     for idx, stored in enumerate(hashed_codes):
-        if hmac.compare_digest(cand, stored):
+        ok = verify_password(norm, stored) if stored.startswith("$argon2") else hmac.compare_digest(legacy, stored)
+        if ok:
             return True, hashed_codes[:idx] + hashed_codes[idx + 1:]
     return False, hashed_codes

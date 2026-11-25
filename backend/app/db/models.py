@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -142,6 +143,8 @@ class LedgerEntry(Base):
         ),
         CheckConstraint("amount <> 0", name="ck_ledger_entries_amount_nonzero"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_ledger_entries_currency_format"),
+        Index("ix_ledger_entries_account_created", "account_id", "created_at"),
+        Index("ix_ledger_entries_transaction_id", "transaction_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

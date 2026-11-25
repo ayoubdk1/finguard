@@ -338,6 +338,8 @@ export interface AuthTokenResponse {
   access_token: string
   refresh_token?: string
   token_type: string
+  mfa_required?: boolean
+  mfa_token?: string | null
 }
 
 export async function loginUser(
@@ -353,6 +355,37 @@ export async function loginUser(
 
   if (!response.ok) {
     let message = 'Login failed'
+    try {
+      const errorData = await response.json()
+      if (errorData && typeof errorData.detail === 'string') {
+        message = errorData.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+
+  const data = (await response.json()) as AuthTokenResponse
+  if (!data.mfa_required && data.access_token) {
+    setTokens(data.access_token, data.refresh_token)
+  }
+  return data
+}
+
+export async function loginMfa(
+  mfaToken: string,
+  code: string
+): Promise<AuthTokenResponse> {
+  const response = await fetch(`${API_BASE_URL}/auth/mfa/login`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mfa_token: mfaToken, code }),
+  })
+
+  if (!response.ok) {
+    let message = 'MFA verification failed'
     try {
       const errorData = await response.json()
       if (errorData && typeof errorData.detail === 'string') {
@@ -511,7 +544,7 @@ export interface ActiveSessionList {
 }
 
 function authHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? window.localStorage?.getItem('finguard_access_token') : null
+  const token = getAccessToken()
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -602,8 +635,12 @@ export interface MfaSetupData {
   issuer?: string
 }
 
-export async function setupMfa(): Promise<MfaSetupData> {
-  const res = await fetch(`${API_BASE_URL}/auth/mfa/setup`, { method: 'POST', headers: authHeaders() })
+export async function setupMfa(currentPassword: string): Promise<MfaSetupData> {
+  const res = await fetch(`${API_BASE_URL}/auth/mfa/setup`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ current_password: currentPassword }),
+  })
   return handleAdminResponse<MfaSetupData>(res, 'Failed to start MFA setup')
 }
 

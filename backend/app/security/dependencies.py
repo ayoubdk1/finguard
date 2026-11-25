@@ -140,5 +140,5 @@ def require_recent_login(credentials: HTTPAuthorizationCredentials | None = Depe
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
     import time
-    if (time.time() - int(claims.get("iat", 0))) > max_age_seconds:
+    if (time.time() - int(claims.get("auth_time", claims.get("iat", 0)))) > max_age_seconds:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Recent login required for MFA changes")

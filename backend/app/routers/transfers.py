@@ -86,8 +86,6 @@ def create_deposit(
             )
         if getattr(account, "status", "ACTIVE") != "ACTIVE":
             raise HTTPException(status_code=403, detail=f"Account is {account.status.lower()} and cannot accept deposits")
-        if getattr(account, "status", "ACTIVE") != "ACTIVE":
-            raise HTTPException(status_code=403, detail=f"Account is {account.status.lower()} and cannot accept deposits")
 
         # 2. Find SYSTEM_FUNDING for the customer's currency
         funding = db.scalar(
@@ -240,9 +238,14 @@ def create_transfer(
                     )
                 )
                 if fx_del is not None:
-                    pos_del = [e for e in fx_del.entries if e.amount > 0]
-                    if pos_del:
-                        rep_conv = pos_del[0].amount
+                    pos_entry = db.scalar(
+                        select(LedgerEntry).where(
+                            LedgerEntry.transaction_id == fx_del.id,
+                            LedgerEntry.amount > 0,
+                        )
+                    )
+                    if pos_entry is not None:
+                        rep_conv = int(pos_entry.amount)
                 fee_row = db.scalar(
                     select(LedgerEntry)
                     .join(Account, Account.id == LedgerEntry.account_id)
@@ -251,11 +254,12 @@ def create_transfer(
                         Account.name == "SYSTEM_FX_FEE_REVENUE",
                     )
                 )
-                rep_fee = fee_row.amount if fee_row is not None else 0
+                rep_fee = int(fee_row.amount) if fee_row is not None else 0
                 try:
                     rep_rate = float(Decimal(get_latest_rate(db, src_acct.currency, dst_acct.currency).rate) / Decimal(1_000_000))
-                except ExchangeRateNotFound:
-                    rep_rate = None
+                except (ExchangeRateNotFound, StaleExchangeRateError):
+                    net_src = data.amount_cents - rep_fee
+                    rep_rate = round(float(rep_conv) / float(net_src), 6) if (rep_conv is not None and net_src > 0) else None
             return {
                 "transaction_id": replay_tx.id,
                 "status": replay_tx.status,
@@ -319,12 +323,18 @@ def create_transfer(
                     raise HTTPException(status_code=400, detail="Transfers require customer accounts")
                 if getattr(source, "status", "ACTIVE") != "ACTIVE" or getattr(destination, "status", "ACTIVE") != "ACTIVE":
                     raise HTTPException(status_code=403, detail="Source or destination account is not active")
-                if getattr(source, "status", "ACTIVE") != "ACTIVE" or getattr(destination, "status", "ACTIVE") != "ACTIVE":
-                    raise HTTPException(status_code=403, detail="Source or destination account is not active")
 
                 try:
                     check_transfer_limits(db, source.id, data.amount_cents, currency=source.currency)
                 except (TransactionLimitExceeded, DailyLimitExceeded) as exc:
+                    db.add(TransferAttempt(
+                        source_account_id=source.id,
+                        destination_account_id=destination.id,
+                        amount_cents=data.amount_cents,
+                        currency=source.currency,
+                        reason="LIMIT_EXCEEDED",
+                    ))
+                    db.commit()
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
 
                 # Pre-settlement fraud scoring (before ledger posting)
@@ -359,12 +369,52 @@ def create_transfer(
                     )
                     or 0
                 )
-                risk = assess_transaction_risk(
-                    amount_cents=data.amount_cents,
-                    transfers_last_10min=transfers_10m,
-                    account_age_minutes=account_age_min,
-                    failed_transfers_last_hour=failed_1h,
+                dest_entry = LedgerEntry.__table__.alias("dest_entry")
+                prior_to_dest = db.scalar(
+                    select(func.count())
+                    .select_from(LedgerEntry)
+                    .join(dest_entry, dest_entry.c.transaction_id == LedgerEntry.transaction_id)
+                    .where(
+                        LedgerEntry.account_id == source.id,
+                        LedgerEntry.amount < 0,
+                        dest_entry.c.account_id == destination.id,
+                        dest_entry.c.amount > 0,
+                    )
+                ) or 0
+                is_new_dest = prior_to_dest == 0
+                avg_outgoing = db.scalar(
+                    select(func.avg(func.abs(LedgerEntry.amount))).where(
+                        LedgerEntry.account_id == source.id,
+                        LedgerEntry.amount < 0,
+                    )
                 )
+                amount_vs_avg = (float(data.amount_cents) / float(avg_outgoing)) if (avg_outgoing and float(avg_outgoing) > 0) else 1.0
+                normalized_usd_cents: int | None = data.amount_cents if source.currency == "USD" else None
+                if source.currency != "USD":
+                    try:
+                        usd_rate = get_latest_rate(db, source.currency, "USD")
+                        normalized_usd_cents = int(round(data.amount_cents * usd_rate.rate / 1_000_000))
+                    except (ExchangeRateNotFound, StaleExchangeRateError):
+                        try:
+                            inv_rate = get_latest_rate(db, "USD", source.currency)
+                            if inv_rate.rate > 0:
+                                normalized_usd_cents = int(round(data.amount_cents * 1_000_000 / inv_rate.rate))
+                        except (ExchangeRateNotFound, StaleExchangeRateError):
+                            normalized_usd_cents = None
+                try:
+                    risk = assess_transaction_risk(
+                        amount_cents=data.amount_cents,
+                        transfers_last_10min=transfers_10m,
+                        account_age_minutes=account_age_min,
+                        failed_transfers_last_hour=failed_1h,
+                        is_new_destination=is_new_dest,
+                        amount_vs_avg_ratio=amount_vs_avg,
+                        normalized_amount_usd_cents=normalized_usd_cents,
+                    )
+                except Exception as exc:
+                    db.rollback()
+                    logger.exception("Pre-settlement fraud scorer failed: %s", exc)
+                    raise HTTPException(status_code=503, detail="Risk assessment unavailable; transfer not executed") from exc
                 FRAUD_RISK_SCORE.observe(float(risk.get("rules_risk_score", 0)))
                 if risk.get("rules_decision") == "SIMULATED_HOLD":
                     raw_score = risk.get("ml_probability")
@@ -484,40 +534,25 @@ def create_transfer(
 
                 TRANSFERS_TOTAL.labels(currency=source.currency, status="COMPLETED").inc()
                 if risk.get("review_recommended"):
-                    existing_alert = db.scalar(select(FraudAlert).where(FraudAlert.transaction_id == tx.id))
-                    if existing_alert is None:
-                        raw_score = risk.get("ml_probability")
-                        if raw_score is None:
-                            raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
-                        db.add(
-                            FraudAlert(
-                                transaction_id=tx.id,
-                                account_id=source.id,
-                                risk_score=int(round(float(raw_score) * 1000)),
-                                reasons=risk.get("reason_codes") or ["ML_ANOMALY"],
-                                status=FraudAlertStatus.PENDING.value,
+                    try:
+                        existing_alert = db.scalar(select(FraudAlert).where(FraudAlert.transaction_id == tx.id))
+                        if existing_alert is None:
+                            raw_score = risk.get("ml_probability")
+                            if raw_score is None:
+                                raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
+                            db.add(
+                                FraudAlert(
+                                    transaction_id=tx.id,
+                                    account_id=source.id,
+                                    risk_score=int(round(float(raw_score) * 1000)),
+                                    reasons=risk.get("reason_codes") or ["ML_ANOMALY"],
+                                    status=FraudAlertStatus.PENDING.value,
+                                )
                             )
-                        )
-                        db.commit()
-                if risk.get("review_recommended"):
-                    existing_alert = db.scalar(
-                        select(FraudAlert).where(FraudAlert.transaction_id == tx.id)
-                    )
-                    if existing_alert is None:
-                        raw_score = risk.get("ml_probability")
-                        if raw_score is None:
-                            raw_score = min(1.0, float(risk.get("rules_risk_score", 0)) / 100.0)
-                        reasons = risk.get("reason_codes") or ["ML_ANOMALY"]
-                        db.add(
-                            FraudAlert(
-                                transaction_id=tx.id,
-                                account_id=source.id,
-                                risk_score=int(round(float(raw_score) * 1000)),
-                                reasons=reasons,
-                                status=FraudAlertStatus.PENDING.value,
-                            )
-                        )
-                        db.commit()
+                            db.commit()
+                    except Exception as exc:
+                        db.rollback()
+                        logger.exception("Post-transfer FraudAlert persistence failed: %s", exc)
 
                 return {
                     "transaction_id": tx.id,
@@ -605,170 +640,172 @@ def refund_transfer(
     if not has_permission(current_user.role, Permission.TRANSFER_CREATE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
-    with SessionLocal() as db:
-        original_tx = db.get(Transaction, transfer_id)
-        if original_tx is None:
-            raise HTTPException(status_code=404, detail="Original transaction not found")
-
-        if original_tx.status != TransactionStatus.POSTED:
-            raise HTTPException(status_code=400, detail="Only posted transactions can be refunded")
-
-        # Sort entries: debit entry (negative) and credit entry (positive)
-        entries = sorted(original_tx.entries, key=lambda e: e.amount)
-        if len(entries) < 2:
-            raise HTTPException(status_code=400, detail="Cannot refund non-transfer transaction")
-
-        debit_entry = entries[0]
-        credit_entry = max(entries[1:], key=lambda e: e.amount)
-        orig_source_id = debit_entry.account_id
-        orig_dest_id = credit_entry.account_id
-        transfer_amount = credit_entry.amount
-
-        if original_tx.original_transaction_id is not None:
-            raise HTTPException(status_code=409, detail="Cannot refund a refund transaction")
-
-        tx_created = original_tx.created_at
-        if tx_created.tzinfo is None:
-            tx_created = tx_created.replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - tx_created) > timedelta(days=30):
-            raise HTTPException(status_code=422, detail="Refund window (30 days) has expired")
-
-        fx_leg_peek = db.scalar(
-            select(Transaction).where(
-                Transaction.idempotency_scope == f"{original_tx.idempotency_scope}:fx_delivery",
-                Transaction.idempotency_key == f"{original_tx.idempotency_key}:fx_delivery",
-            )
-        )
-        recipient_acct_id = orig_dest_id
-        if fx_leg_peek is not None:
-            fx_e = sorted(fx_leg_peek.entries, key=lambda e: e.amount)
-            if len(fx_e) == 2:
-                recipient_acct_id = fx_e[1].account_id
-
-        src_acct_rf = db.get(Account, orig_source_id)
-        dst_acct_rf = db.get(Account, recipient_acct_id)
-        if (src_acct_rf and getattr(src_acct_rf, "status", "ACTIVE") != "ACTIVE") or (dst_acct_rf and getattr(dst_acct_rf, "status", "ACTIVE") != "ACTIVE"):
-            raise HTTPException(status_code=403, detail="Cannot refund when an account is not active")
-
-        src_acct_rf = db.get(Account, orig_source_id)
-        dst_acct_rf = db.get(Account, recipient_acct_id)
-        if (src_acct_rf and getattr(src_acct_rf, "status", "ACTIVE") != "ACTIVE") or (dst_acct_rf and getattr(dst_acct_rf, "status", "ACTIVE") != "ACTIVE"):
-            raise HTTPException(status_code=403, detail="Cannot refund when an account is not active")
-
-        if current_user.role != Role.ADMIN:
-            recipient_acct = db.get(Account, recipient_acct_id)
-            if recipient_acct is None or recipient_acct.user_id != current_user.id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Only the recipient or an admin can refund this transfer",
+    max_db_attempts = 4
+    for attempt in range(1, max_db_attempts + 1):
+        with SessionLocal() as db:
+            try:
+                original_tx = db.scalar(
+                    select(Transaction).where(Transaction.id == transfer_id).with_for_update()
                 )
+                if original_tx is None:
+                    raise HTTPException(status_code=404, detail="Original transaction not found")
 
-        refund_scope = f"{current_user.id}:POST:/transfers/{transfer_id}/refund"
-        refund_hash = compute_request_hash({"transfer_id": str(transfer_id)})
+                if original_tx.status != TransactionStatus.POSTED:
+                    raise HTTPException(status_code=400, detail="Only posted transactions can be refunded")
 
-        replay_tx = db.scalar(
-            select(Transaction).where(
-                Transaction.idempotency_scope == refund_scope,
-                Transaction.idempotency_key == idempotency_key,
-            )
-        )
-        if replay_tx is not None:
-            if replay_tx.request_hash is not None and replay_tx.request_hash != refund_hash:
-                raise HTTPException(status_code=409, detail="Idempotency key used for different refund")
+                entries = sorted(original_tx.entries, key=lambda e: e.amount)
+                if len(entries) < 2:
+                    raise HTTPException(status_code=400, detail="Cannot refund non-transfer transaction")
+
+                debit_entry = entries[0]
+                credit_entry = max(entries[1:], key=lambda e: e.amount)
+                orig_source_id = debit_entry.account_id
+                orig_dest_id = credit_entry.account_id
+                transfer_amount = credit_entry.amount
+
+                if original_tx.original_transaction_id is not None:
+                    raise HTTPException(status_code=409, detail="Cannot refund a refund transaction")
+
+                tx_created = original_tx.created_at
+                if tx_created.tzinfo is None:
+                    tx_created = tx_created.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - tx_created) > timedelta(days=30):
+                    raise HTTPException(status_code=422, detail="Refund window (30 days) has expired")
+
+                fx_leg = db.scalar(
+                    select(Transaction).where(
+                        Transaction.idempotency_scope == f"{original_tx.idempotency_scope}:fx_delivery",
+                        Transaction.idempotency_key == f"{original_tx.idempotency_key}:fx_delivery",
+                    )
+                )
+                recipient_acct_id = orig_dest_id
+                fx_sys_dst_id = None
+                fx_customer_dst_id = None
+                fx_delivered_amount = 0
+                if fx_leg is not None:
+                    fx_entries = sorted(fx_leg.entries, key=lambda e: e.amount)
+                    if len(fx_entries) == 2:
+                        fx_sys_dst_id = fx_entries[0].account_id
+                        fx_customer_dst_id = fx_entries[1].account_id
+                        fx_delivered_amount = fx_entries[1].amount
+                        recipient_acct_id = fx_customer_dst_id
+
+                src_acct_rf = db.get(Account, orig_source_id)
+                dst_acct_rf = db.get(Account, recipient_acct_id)
+                if (src_acct_rf and getattr(src_acct_rf, "status", "ACTIVE") != "ACTIVE") or (dst_acct_rf and getattr(dst_acct_rf, "status", "ACTIVE") != "ACTIVE"):
+                    raise HTTPException(status_code=403, detail="Cannot refund when an account is not active")
+
+                if current_user.role != Role.ADMIN:
+                    if dst_acct_rf is None or dst_acct_rf.user_id != current_user.id:
+                        raise HTTPException(status_code=403, detail="Only the recipient or an admin can refund this transfer")
+
+                refund_scope = f"{current_user.id}:POST:/transfers/{transfer_id}/refund"
+                refund_hash = compute_request_hash({"transfer_id": str(transfer_id)})
+
+                replay_tx = db.scalar(
+                    select(Transaction).where(
+                        Transaction.idempotency_scope == refund_scope,
+                        Transaction.idempotency_key == idempotency_key,
+                    )
+                )
+                if replay_tx is not None:
+                    if replay_tx.request_hash is not None and replay_tx.request_hash != refund_hash:
+                        raise HTTPException(status_code=409, detail="Idempotency key used for different refund")
+                    return TransferResponse(
+                        transaction_id=str(replay_tx.id),
+                        status=replay_tx.status.value,
+                        amount_cents=transfer_amount,
+                        source_account_id=str(orig_dest_id),
+                        destination_account_id=str(orig_source_id),
+                        created_at=replay_tx.created_at.isoformat(),
+                    )
+
+                existing_refund = db.scalar(
+                    select(Transaction).where(Transaction.original_transaction_id == original_tx.id)
+                )
+                if existing_refund:
+                    raise HTTPException(status_code=409, detail="Transaction has already been refunded")
+
+                lock_ids = {orig_source_id, orig_dest_id}
+                if fx_customer_dst_id is not None:
+                    lock_ids.add(fx_customer_dst_id)
+                db.scalars(
+                    select(Account).where(Account.id.in_(sorted(lock_ids))).order_by(Account.id).with_for_update()
+                ).all()
+
+                if fx_customer_dst_id is None or fx_sys_dst_id is None:
+                    refund_tx = post_transaction(
+                        session=db,
+                        idempotency_key=idempotency_key,
+                        idempotency_scope=refund_scope,
+                        request_hash=refund_hash,
+                        original_transaction_id=original_tx.id,
+                        entries=[EntryInput(orig_dest_id, -transfer_amount), EntryInput(orig_source_id, transfer_amount)],
+                        description=f"Refund of {original_tx.id}",
+                        commit=False,
+                    )
+                else:
+                    refund_tx = post_transaction(
+                        session=db,
+                        idempotency_key=idempotency_key,
+                        idempotency_scope=refund_scope,
+                        request_hash=refund_hash,
+                        original_transaction_id=original_tx.id,
+                        entries=[EntryInput(orig_dest_id, -transfer_amount), EntryInput(orig_source_id, transfer_amount)],
+                        description=f"Refund of {original_tx.id}",
+                        commit=False,
+                    )
+                    post_transaction(
+                        session=db,
+                        idempotency_key=f"{idempotency_key}:fx_refund",
+                        idempotency_scope=f"{refund_scope}:fx_refund",
+                        request_hash=refund_hash,
+                        entries=[EntryInput(fx_customer_dst_id, -fx_delivered_amount), EntryInput(fx_sys_dst_id, fx_delivered_amount)],
+                        description=f"FX Refund of {original_tx.id}",
+                        commit=False,
+                    )
+
+                record_audit_event(db, action="TRANSFER_REFUND", resource_type="TRANSACTION", resource_id=transfer_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
+                db.commit()
                 return TransferResponse(
-                    transaction_id=str(replay_tx.id),
-                    status=replay_tx.status.value,
+                    transaction_id=str(refund_tx.id),
+                    status=refund_tx.status.value,
                     amount_cents=transfer_amount,
                     source_account_id=str(orig_dest_id),
                     destination_account_id=str(orig_source_id),
-                    created_at=replay_tx.created_at.isoformat(),
+                    created_at=refund_tx.created_at.isoformat(),
                 )
-
-        existing_refund = db.scalar(
-            select(Transaction).where(
-                Transaction.original_transaction_id == original_tx.id,
-            )
-        )
-        if existing_refund:
-            raise HTTPException(status_code=409, detail="Transaction has already been refunded")
-
-        fx_leg = db.scalar(
-            select(Transaction).where(
-                Transaction.idempotency_scope == f"{original_tx.idempotency_scope}:fx_delivery",
-                Transaction.idempotency_key == f"{original_tx.idempotency_key}:fx_delivery",
-            )
-        )
-
-        try:
-            if fx_leg is None:
-                refund_tx = post_transaction(
-                    session=db,
-                    idempotency_key=idempotency_key,
-                    idempotency_scope=refund_scope,
-                    request_hash=refund_hash,
-                    original_transaction_id=original_tx.id,
-                    entries=[
-                        EntryInput(orig_dest_id, -transfer_amount),
-                        EntryInput(orig_source_id, transfer_amount),
-                    ],
-                    description=f"Refund of {original_tx.id}",
-                )
-            else:
-                fx_entries = sorted(fx_leg.entries, key=lambda e: e.amount)
-                fx_sys_dst_id = fx_entries[0].account_id
-                fx_customer_dst_id = fx_entries[1].account_id
-                fx_delivered_amount = fx_entries[1].amount
-
-                refund_tx = post_transaction(
-                    session=db,
-                    idempotency_key=idempotency_key,
-                    idempotency_scope=refund_scope,
-                    request_hash=refund_hash,
-                    original_transaction_id=original_tx.id,
-                    entries=[
-                        EntryInput(orig_dest_id, -transfer_amount),
-                        EntryInput(orig_source_id, transfer_amount),
-                    ],
-                    description=f"Refund of {original_tx.id}",
-                    commit=False,
-                )
-                post_transaction(
-                    session=db,
-                    idempotency_key=f"{idempotency_key}:fx_refund",
-                    idempotency_scope=f"{refund_scope}:fx_refund",
-                    request_hash=refund_hash,
-                    entries=[
-                        EntryInput(fx_customer_dst_id, -fx_delivered_amount),
-                        EntryInput(fx_sys_dst_id, fx_delivered_amount),
-                    ],
-                    description=f"FX Refund of {original_tx.id}",
-                    commit=False,
-                )
-                db.commit()
-        except IdempotencyConflict as exc:
-            db.rollback()
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except InsufficientFunds as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail=f"Refund failed: recipient has insufficient funds ({exc})",
-            ) from exc
-        except Exception as exc:
-            db.rollback()
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        record_audit_event(db, action="TRANSFER_REFUND", resource_type="TRANSACTION", resource_id=transfer_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
-        db.commit()
-        return TransferResponse(
-            transaction_id=str(refund_tx.id),
-            status=refund_tx.status.value,
-            amount_cents=transfer_amount,
-            source_account_id=str(orig_dest_id),
-            destination_account_id=str(orig_source_id),
-            created_at=refund_tx.created_at.isoformat(),
-        )
-
+            except HTTPException:
+                db.rollback()
+                raise
+            except IdempotencyConflict as exc:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except InsufficientFunds as exc:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="Refund failed: recipient has insufficient funds") from exc
+            except InvalidTransaction as exc:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except LedgerError as exc:
+                db.rollback()
+                if "deadlock" in str(exc).lower() and attempt < max_db_attempts:
+                    time.sleep(calculate_backoff_delay(attempt, base_delay_seconds=0.02, max_delay_seconds=0.2, jitter_ratio=0.5))
+                    continue
+                logger.warning("Refund ledger error: %s", exc)
+                raise HTTPException(status_code=409, detail="Refund conflicted with a concurrent update; please retry") from exc
+            except DBAPIError as exc:
+                db.rollback()
+                sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+                if sqlstate in ("40P01", "40001") and attempt < max_db_attempts:
+                    time.sleep(calculate_backoff_delay(attempt, base_delay_seconds=0.02, max_delay_seconds=0.2, jitter_ratio=0.5))
+                    continue
+                logger.warning("Refund DB error: %s", exc)
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable; please retry") from exc
+            except SQLAlchemyError as exc:
+                db.rollback()
+                logger.warning("Refund SQLAlchemy error: %s", exc)
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable; please retry") from exc
 
 @router.post("/deposits/request", status_code=201)
 def request_deposit_approval(data: DepositCreate, request: Request, current_user: User = Depends(get_current_user)):
