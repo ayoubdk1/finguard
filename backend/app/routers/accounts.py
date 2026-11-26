@@ -1,9 +1,10 @@
+import base64
 import logging
 from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
@@ -172,45 +173,52 @@ def account_balance(
 )
 def account_transactions(
     account_id: UUID,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    cursor: str | None = Query(default=None),
     current_user: User = Depends(get_current_user),
 ):
     ensure_user_owns_account_id(account_id, current_user)
 
     with SessionLocal() as db:
-
-        # 1. Check account exists
         account = db.get(Account, account_id)
-
         if account is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Account not found",
-            )
+            raise HTTPException(status_code=404, detail="Account not found")
 
-        # 2. Retrieve ledger entries and transactions
+        q = (
+            select(LedgerEntry, Transaction)
+            .join(Transaction, LedgerEntry.transaction_id == Transaction.id)
+            .where(LedgerEntry.account_id == account_id)
+        )
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+                ts_str, eid_str = raw.split("|", 1)
+                c_ts = datetime.fromisoformat(ts_str)
+                c_id = int(eid_str)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid pagination cursor") from exc
+            q = q.where(
+                or_(
+                    Transaction.created_at < c_ts,
+                    (Transaction.created_at == c_ts) & (LedgerEntry.id < c_id),
+                )
+            )
+        else:
+            q = q.offset(offset)
+
         rows = db.execute(
-            select(
-                LedgerEntry,
-                Transaction,
-            )
-            .join(
-                Transaction,
-                LedgerEntry.transaction_id == Transaction.id,
-            )
-            .where(
-                LedgerEntry.account_id == account_id
-            )
-            .order_by(
-                Transaction.created_at.desc(),
-                LedgerEntry.id.desc(),
-            )
-            .limit(limit)
-            .offset(offset)
+            q.order_by(Transaction.created_at.desc(), LedgerEntry.id.desc()).limit(limit + 1)
         ).all()
 
-        # 3. Build transaction history
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+        next_cursor: str | None = None
+        if has_more and page_rows:
+            last_entry, last_tx = page_rows[-1]
+            token = f"{last_tx.created_at.isoformat()}|{last_entry.id}"
+            next_cursor = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
+
         history = [
             TransactionHistoryItem(
                 transaction_id=tx.id,
@@ -220,13 +228,12 @@ def account_transactions(
                 amount_cents=entry.amount,
                 currency=entry.currency,
             )
-            for entry, tx in rows
+            for entry, tx in page_rows
         ]
-
-        # 4. Return transaction history
         return TransactionHistoryResponse(
             account_id=account_id,
             transactions=history,
+            next_cursor=next_cursor,
         )
 
 

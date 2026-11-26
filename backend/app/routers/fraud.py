@@ -1,9 +1,10 @@
+import base64
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import func, or_, select
 
 from app.db.models import (
     Account,
@@ -31,7 +32,10 @@ router = APIRouter()
 
 @router.get("/fraud/alerts", response_model=list[FraudAlertResponse])
 def list_fraud_alerts(
+    response: Response,
     status_filter: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None),
     current_user: User = Depends(get_current_user),
 ):
     if not has_permission(current_user.role, Permission.FRAUD_ALERT_READ):
@@ -41,7 +45,30 @@ def list_fraud_alerts(
         query = select(FraudAlert)
         if status_filter:
             query = query.where(FraudAlert.status == status_filter.upper())
-        alerts = db.scalars(query.order_by(FraudAlert.created_at.desc())).all()
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+                ts_str, aid_str = raw.split("|", 1)
+                c_ts = datetime.fromisoformat(ts_str)
+                c_id = UUID(aid_str)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid pagination cursor") from exc
+            query = query.where(
+                or_(
+                    FraudAlert.created_at < c_ts,
+                    (FraudAlert.created_at == c_ts) & (FraudAlert.id < c_id),
+                )
+            )
+        rows = list(
+            db.scalars(
+                query.order_by(FraudAlert.created_at.desc(), FraudAlert.id.desc()).limit(limit + 1)
+            ).all()
+        )
+        alerts = rows[:limit]
+        if len(rows) > limit and alerts:
+            last = alerts[-1]
+            tok = base64.urlsafe_b64encode(f"{last.created_at.isoformat()}|{last.id}".encode("utf-8")).decode("ascii")
+            response.headers["X-Next-Cursor"] = tok
         return [
 FraudAlertResponse(
             id=a.id, transaction_id=a.transaction_id, account_id=a.account_id,

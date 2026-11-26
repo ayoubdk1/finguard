@@ -124,13 +124,32 @@ def check_login_rate_limit(request: Request, email: str | None = None) -> None:
     check_rate_limit("login:ip", ip, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts. Please try again later.")
 
 
-def record_failed_login_and_check_spray(email: str) -> None:
+def record_failed_login_and_check_spray(email: str, ip: str | None = None) -> float:
+    """Record a failed login keyed on (email, ip) with progressive backoff + account spray protection."""
     if not email or not email.strip():
-        return
-    check_rate_limit("login:acct_fail", _email_bucket_key(email), LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many failed login attempts for this account. Please try again later.")
-    if email:
-        acct_key = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:24]
-        check_rate_limit("login:acct", acct_key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS, "Too many login attempts for this account.")
+        return 0.0
+    email_key = _email_bucket_key(email)
+    delay_seconds = 0.0
+    if ip:
+        pair_key = f"login:pair:{email_key}:{ip}"
+        now = time.monotonic()
+        with _lock:
+            recent = [t for t in _buckets[pair_key] if t > now - LOGIN_WINDOW_SECONDS]
+            recent.append(now)
+            _buckets[pair_key] = recent
+            failures = len(recent)
+        if failures >= 2:
+            delay_seconds = min(2.0, 0.25 * (2 ** (failures - 2)))
+            if os.getenv("FINGUARD_ENV", "development").lower() != "test":
+                time.sleep(delay_seconds)
+    check_rate_limit(
+        "login:acct_fail",
+        email_key,
+        LOGIN_MAX_ATTEMPTS,
+        LOGIN_WINDOW_SECONDS,
+        "Too many failed login attempts for this account. Please try again later.",
+    )
+    return delay_seconds
 
 
 def check_mfa_rate_limit(account_key: str) -> None:

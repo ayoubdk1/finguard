@@ -31,19 +31,18 @@ def assess_transaction_risk(
 
     reason_codes = list(rules.get("reason_codes", []))
     raw_score = float(rules.get("risk_score", rules.get("score", 0)))
-    is_unit_scale = raw_score <= 1.0
     if is_new_destination:
         reason_codes.append("NEW_DESTINATION")
         if effective_amount >= 50_000:
             reason_codes.append("NEW_DESTINATION_HIGH_AMOUNT")
-        raw_score += 0.15 if is_unit_scale else 15.0
+        raw_score += 15.0
     if amount_vs_avg_ratio >= 3.0:
         reason_codes.append("AMOUNT_SPIKE_VS_AVERAGE")
-        raw_score += 0.20 if is_unit_scale else 20.0
-    risk_score = min(1.0, round(raw_score, 4)) if is_unit_scale else min(100.0, round(raw_score, 2))
+        raw_score += 20.0
+    risk_score = min(100.0, round(raw_score, 2))
 
     decision = rules["decision"]
-    if decision == "ALLOW" and ((is_unit_scale and risk_score >= 0.35) or (not is_unit_scale and risk_score >= 35)):
+    if decision == "ALLOW" and risk_score >= 35.0:
         decision = "REVIEW"
 
     ml_available = ml.get("ml_available", ml.get("ml_prediction") in ("FRAUD", "NORMAL"))

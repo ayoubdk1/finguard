@@ -113,7 +113,7 @@ def login_user(request: Request, response: Response, payload: LoginRequest):
         if user is None or not user.password_hash or not password_ok:
             session.add(LoginHistory(user_id=user.id if user else None, email=payload.email, ip_address=client_ip[:45] if client_ip else None, user_agent=user_agent[:255] if user_agent else None, success=False, failure_reason="Invalid credentials"))
             session.commit()
-            record_failed_login_and_check_spray(payload.email)
+            record_failed_login_and_check_spray(payload.email, client_ip)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password", headers={"WWW-Authenticate": "Bearer"})
         if getattr(user, "status", "ACTIVE") != "ACTIVE":
             session.add(LoginHistory(user_id=user.id, email=user.email, ip_address=client_ip[:45] if client_ip else None, user_agent=user_agent[:255] if user_agent else None, success=False, failure_reason=f"Account {user.status.lower()}"))
