@@ -124,6 +124,7 @@ jobs:
       FINGUARD_MFA_ENCRYPTION_KEY: ci-smoke-mfa-encryption-key-for-testing  # gitleaks:allow
       GRAFANA_ADMIN_USER: admin
       GRAFANA_ADMIN_PASSWORD: ci_grafana_password_123
+      FINGUARD_BASE_URL: http://127.0.0.1:8088/api
     steps:
       - uses: actions/checkout@v4
       - name: Start stack and wait for healthy
