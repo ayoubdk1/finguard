@@ -1,9 +1,10 @@
+import base64
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import func, or_, select
 
 from app.db.models import (
     ApprovalRequest,
@@ -43,14 +44,37 @@ router = APIRouter()
     response_model=list[AdminUserResponse],
     status_code=status.HTTP_200_OK,
 )
-def admin_list_users(current_user: User = Depends(get_current_user)):
+def admin_list_users(
+    response: Response,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+):
     if not has_permission(current_user.role, Permission.USER_MANAGE):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
     with SessionLocal() as session:
-        users = session.scalars(
-            select(User).order_by(User.created_at.desc())
-        ).all()
+        q = select(User)
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+                ts_str, uid_str = raw.split("|", 1)
+                c_ts = datetime.fromisoformat(ts_str)
+                c_id = UUID(uid_str)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid pagination cursor") from exc
+            q = q.where(
+                or_(
+                    User.created_at < c_ts,
+                    (User.created_at == c_ts) & (User.id < c_id),
+                )
+            )
+        rows = list(session.scalars(q.order_by(User.created_at.desc(), User.id.desc()).limit(limit + 1)).all())
+        users = rows[:limit]
+        if len(rows) > limit and users:
+            last = users[-1]
+            tok = base64.urlsafe_b64encode(f"{last.created_at.isoformat()}|{last.id}".encode("utf-8")).decode("ascii")
+            response.headers["X-Next-Cursor"] = tok
         return users
 
 

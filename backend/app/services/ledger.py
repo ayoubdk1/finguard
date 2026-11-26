@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     Account,
+    AccountBalance,
     AccountType,
     LedgerEntry,
     Transaction,
@@ -103,16 +105,33 @@ def post_transaction(
             raise IdempotencyConflict("Idempotency key used for different request payload")
         return existing
 
-    # 3. Lock the accounts in a fixed UUID order to avoid deadlocks
+    # 3. Load involved accounts; lock ONLY customer accounts in sorted UUID order
+    # (SYSTEM_* accounts are exempt from overdraft and must not become hot-row lock bottlenecks)
     account_ids = sorted({e.account_id for e in entries})
-    accounts = session.scalars(
-        select(Account).where(Account.id.in_(account_ids)).order_by(Account.id).with_for_update()
-    ).all()
+    accounts = list(
+        session.scalars(
+            select(Account).where(Account.id.in_(account_ids)).order_by(Account.id)
+        ).all()
+    )
 
     if len(accounts) != len(account_ids):
         if commit:
             session.rollback()
         raise AccountNotFound("one or more accounts do not exist")
+
+    customer_ids = sorted(a.id for a in accounts if a.account_type == AccountType.CUSTOMER)
+    if customer_ids:
+        locked_customers = list(
+            session.scalars(
+                select(Account)
+                .where(Account.id.in_(customer_ids))
+                .order_by(Account.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+        locked_map = {a.id: a for a in locked_customers}
+        accounts = [locked_map.get(a.id, a) for a in accounts]
 
     by_id = {a.id: a for a in accounts}
 
@@ -147,15 +166,33 @@ def post_transaction(
     try:
         session.add(tx)
         session.flush()
+        last_entry_by_acct: dict[uuid.UUID, int] = {}
         for e in entries:
-            session.add(
-                LedgerEntry(
-                    transaction_id=tx.id,
-                    account_id=e.account_id,
-                    amount=e.amount,
-                    currency=by_id[e.account_id].currency,
-                )
+            le = LedgerEntry(
+                transaction_id=tx.id,
+                account_id=e.account_id,
+                amount=e.amount,
+                currency=by_id[e.account_id].currency,
             )
+            session.add(le)
+            session.flush()
+            last_entry_by_acct[e.account_id] = le.id
+        for acct in accounts:
+            if acct.account_type == AccountType.CUSTOMER:
+                delta = deltas[acct.id]
+                stmt = pg_insert(AccountBalance).values(
+                    account_id=acct.id,
+                    balance=delta,
+                    last_entry_id=last_entry_by_acct.get(acct.id),
+                ).on_conflict_do_update(
+                    index_elements=["account_id"],
+                    set_={
+                        "balance": AccountBalance.balance + delta,
+                        "last_entry_id": last_entry_by_acct.get(acct.id),
+                        "updated_at": func.now(),
+                    },
+                )
+                session.execute(stmt)
         session.flush()
         if before_commit is not None:
             before_commit(session, tx)
@@ -180,3 +217,27 @@ def post_transaction(
         raise
 
     return tx
+
+
+def verify_balance_projections(session: Session) -> list[dict[str, Any]]:
+    """Compare every account_balances row against SUM(ledger_entries.amount)."""
+    rows = session.execute(
+        select(
+            AccountBalance.account_id,
+            AccountBalance.balance,
+            func.coalesce(func.sum(LedgerEntry.amount), 0).label("ledger_sum"),
+        )
+        .outerjoin(LedgerEntry, LedgerEntry.account_id == AccountBalance.account_id)
+        .group_by(AccountBalance.account_id, AccountBalance.balance)
+    ).all()
+    mismatches: list[dict[str, Any]] = []
+    for account_id, proj_bal, ledger_sum in rows:
+        if int(proj_bal) != int(ledger_sum):
+            mismatches.append(
+                {
+                    "account_id": str(account_id),
+                    "projected_balance": int(proj_bal),
+                    "ledger_sum": int(ledger_sum),
+                }
+            )
+    return mismatches

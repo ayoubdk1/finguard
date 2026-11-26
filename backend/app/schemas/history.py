@@ -17,3 +17,4 @@ class TransactionHistoryItem(BaseModel):
 class TransactionHistoryResponse(BaseModel):
     account_id: UUID
     transactions: list[TransactionHistoryItem]
+    next_cursor: str | None = None
