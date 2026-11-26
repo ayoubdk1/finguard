@@ -58,7 +58,7 @@ jobs:
           COV=$(python -c "import xml.etree.ElementTree as ET; print(round(float(ET.parse('coverage.xml').getroot().attrib['line-rate'])*100, 1))")
           echo "### Backend Coverage: **${COV}%**" >> "$GITHUB_STEP_SUMMARY"
           echo "[https://img.shields.io/badge/coverage-${COV}%25-brightgreen]" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: backend/coverage.xml
