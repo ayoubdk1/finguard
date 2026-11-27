@@ -337,6 +337,7 @@ def update_account_status(
         if payload.status == "CLOSED" and get_balance(db, account.id) != 0:
             raise HTTPException(status_code=409, detail="Cannot close account with non-zero balance")
 
+        old_status = account.status
         account.status = payload.status
         record_audit_event(
             db,
@@ -344,8 +345,11 @@ def update_account_status(
             resource_type="ACCOUNT",
             resource_id=account.id,
             actor_id=current_user.id,
+            actor_role=current_user.role,
             ip_address=get_client_ip(request),
             request_id=get_request_id(request),
+            before={"status": old_status},
+            after={"status": payload.status},
         )
         db.commit()
         db.refresh(account)

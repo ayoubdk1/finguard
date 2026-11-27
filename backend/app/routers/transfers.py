@@ -180,6 +180,18 @@ def create_deposit(
             )
 
         # 6. Return result
+        record_audit_event(
+            db,
+            action="DEPOSIT_CREATED",
+            resource_type="TRANSACTION",
+            resource_id=tx.id,
+            actor_id=current_user.id,
+            actor_role=current_user.role,
+            ip_address=get_client_ip(request),
+            request_id=get_request_id(request),
+            after={"account_id": str(account.id), "amount_cents": data.amount_cents, "currency": account.currency},
+        )
+        db.commit()
         return {
             "transaction_id": tx.id,
             "status": tx.status,
@@ -766,6 +778,18 @@ def refund_transfer(
                     )
 
                 record_audit_event(db, action="TRANSFER_REFUND", resource_type="TRANSACTION", resource_id=transfer_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request))
+                db.commit()
+                record_audit_event(
+                    db,
+                    action="TRANSFER_REFUNDED",
+                    resource_type="TRANSACTION",
+                    resource_id=refund_tx.id,
+                    actor_id=current_user.id,
+                    actor_role=current_user.role,
+                    ip_address=get_client_ip(request),
+                    request_id=get_request_id(request),
+                    after={"original_transaction_id": str(original_tx.id), "amount_cents": transfer_amount},
+                )
                 db.commit()
                 return TransferResponse(
                     transaction_id=str(refund_tx.id),
