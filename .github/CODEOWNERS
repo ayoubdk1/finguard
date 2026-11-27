@@ -1,0 +1,8 @@
+# Critical financial ledger, security, migrations, and CI paths require explicit owner review
+/backend/app/services/ledger.py @ayoubdk1
+/backend/app/services/fx.py @ayoubdk1
+/backend/app/services/limits.py @ayoubdk1
+/backend/app/security/ @ayoubdk1
+/backend/alembic/ @ayoubdk1
+/.github/workflows/ @ayoubdk1
+/docker-compose.yml @ayoubdk1

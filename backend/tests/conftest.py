@@ -145,3 +145,45 @@ def _reset_rate_limits():
     reset_login_rate_limits()
     yield
     reset_login_rate_limits()
+
+
+@pytest.fixture
+def committed_world():
+    """Real committed Postgres rows using pooled sessions for true concurrency tests."""
+    from app.db.session import SessionLocal
+    from app.security.passwords import hash_password
+
+    run = uuid.uuid4().hex[:8]
+    with SessionLocal() as db:
+        ua = User(
+            email=f"conc-alice-{run}@example.com",
+            full_name="Concurrent Alice",
+            password_hash=hash_password("StrongPassword#2026!"),
+            role="CUSTOMER",
+            status="ACTIVE",
+        )
+        ub = User(
+            email=f"conc-bob-{run}@example.com",
+            full_name="Concurrent Bob",
+            password_hash=hash_password("StrongPassword#2026!"),
+            role="CUSTOMER",
+            status="ACTIVE",
+        )
+        db.add_all([ua, ub])
+        db.flush()
+
+        funding = Account(name=f"SYSTEM_FUNDING_{run}", account_type=AccountType.SYSTEM, currency="USD")
+        alice = Account(user_id=ua.id, name="Alice", account_type=AccountType.CUSTOMER, currency="USD")
+        bob = Account(user_id=ub.id, name="Bob", account_type=AccountType.CUSTOMER, currency="USD")
+        db.add_all([funding, alice, bob])
+        db.commit()
+        ids = {
+            "funding_id": funding.id,
+            "alice_id": alice.id,
+            "bob_id": bob.id,
+            "alice_user_id": ua.id,
+            "bob_user_id": ub.id,
+            "alice_user": ua,
+            "bob_user": ub,
+        }
+    return ids
