@@ -187,7 +187,7 @@ def test_p16_governance_files_present():
     root = Path(__file__).resolve().parents[2]
     for rel in [
         ".github/CODEOWNERS",
-        ".github/pull_request_template.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
         "SECURITY.md",
         "CHANGELOG.md",
         "docs/stride-threat-model.md",
