@@ -403,3 +403,60 @@ def reject_pending_request(approval_id: UUID, request: Request, current_user: Us
         record_audit_event(session, action="ROLE_CHANGE_REJECTED", resource_type="USER", resource_id=req.target_id, actor_id=current_user.id, ip_address=get_client_ip(request), request_id=get_request_id(request), details={"approval_id": str(req.id)})
         session.commit()
         return {"id": str(req.id), "status": req.status, "rejected_by": str(req.approved_by)}
+
+
+@router.get("/audit", status_code=status.HTTP_200_OK)
+def auditor_list_audit_log(
+    limit: int = Query(default=50, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "AUDITOR":
+        raise HTTPException(status_code=403, detail="AUDITOR role required")
+    with SessionLocal() as session:
+        q = select(AuditLog)
+        if action:
+            q = q.where(AuditLog.action == action)
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+                ts_str, aid_str = raw.split("|", 1)
+                c_ts = datetime.fromisoformat(ts_str)
+                c_id = UUID(aid_str)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid pagination cursor") from exc
+            q = q.where(
+                or_(
+                    AuditLog.created_at < c_ts,
+                    (AuditLog.created_at == c_ts) & (AuditLog.id < c_id),
+                )
+            )
+        rows = list(session.scalars(q.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit + 1)).all())
+        page = rows[:limit]
+        next_cursor: str | None = None
+        if len(rows) > limit and page:
+            last = page[-1]
+            next_cursor = base64.urlsafe_b64encode(f"{last.created_at.isoformat()}|{last.id}".encode("utf-8")).decode("ascii")
+        return {
+            "items": [
+                {
+                    "id": str(r.id),
+                    "actor_id": str(r.actor_id) if r.actor_id else None,
+                    "actor_role": r.actor_role,
+                    "action": r.action,
+                    "resource_type": r.resource_type,
+                    "resource_id": r.resource_id,
+                    "details": r.details,
+                    "before": r.before,
+                    "after": r.after,
+                    "ip_address": r.ip_address,
+                    "request_id": r.request_id,
+                    "prev_hash": r.prev_hash,
+                    "hash": r.hash,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in page
+            ],
+            "next_cursor": next_cursor,
+        }

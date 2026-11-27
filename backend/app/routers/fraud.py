@@ -22,6 +22,7 @@ from app.security.permissions import Permission, has_permission
 from app.security.tokens import (
     revoke_all_user_sessions,
 )
+from app.services.audit import get_client_ip, get_request_id, record_audit_event
 from app.services.risk_assessment import assess_transaction_risk
 
 logger = logging.getLogger("finguard.security")
@@ -151,6 +152,18 @@ def resolve_alert(
                     owner.status = "SUSPENDED"
                     revoke_all_user_sessions(db, owner.id)
 
+        record_audit_event(
+            db,
+            action="FRAUD_ALERT_RESOLVED",
+            resource_type="FRAUD_ALERT",
+            resource_id=alert.id,
+            actor_id=current_user.id,
+            actor_role=current_user.role,
+            ip_address=get_client_ip(request),
+            request_id=get_request_id(request),
+            before={"status": current_status},
+            after={"status": payload.decision, "analyst_notes": payload.analyst_notes},
+        )
         db.commit()
         db.refresh(alert)
         return FraudAlertResponse(

@@ -20,6 +20,7 @@ class Permission(StrEnum):
     FRAUD_ALERT_READ = "fraud_alert:read"
     FRAUD_ALERT_RESOLVE = "fraud_alert:resolve"
     USER_MANAGE = "user:manage"
+    AUDIT_READ = "audit:read"
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
@@ -38,6 +39,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     }),
     Role.AUDITOR: frozenset({
         Permission.ACCOUNT_READ_ALL,
+        Permission.AUDIT_READ,
         Permission.MONITORING_READ,
         Permission.FRAUD_ALERT_READ,
     }),
